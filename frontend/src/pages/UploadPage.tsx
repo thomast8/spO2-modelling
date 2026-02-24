@@ -1,4 +1,4 @@
-import { CloudUpload as UploadIcon, Delete as DeleteIcon, Science as FitIcon } from "@mui/icons-material";
+import { CloudUpload as UploadIcon, Delete as DeleteIcon, InfoOutlined as InfoIcon, Science as FitIcon } from "@mui/icons-material";
 import {
   Alert,
   Box,
@@ -35,6 +35,7 @@ import type {
   SessionResponse,
 } from "../api/types";
 import SpO2Chart from "../components/charts/SpO2Chart";
+import { PARAM_DESCRIPTIONS } from "../constants/modelDescriptions";
 
 const HOLD_TYPE_OPTIONS = ["untagged", "FRC", "RV", "FL"] as const;
 const HOLD_TYPE_LABELS: Record<string, string> = { untagged: "Skip" };
@@ -189,7 +190,14 @@ function FitResultCard({
             {Object.entries(result.params).map(([key, val]) => (
               <TableRow key={key}>
                 <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
-                  {PARAM_LABELS[key] ?? key}
+                  <Tooltip title={PARAM_DESCRIPTIONS[key] ?? ""} arrow placement="right">
+                    <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
+                      {PARAM_LABELS[key] ?? key}
+                      {PARAM_DESCRIPTIONS[key] && (
+                        <InfoIcon sx={{ fontSize: 14, color: "text.secondary" }} />
+                      )}
+                    </Box>
+                  </Tooltip>
                 </TableCell>
                 <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
                   {typeof val === "number" ? val.toFixed(4) : val}
