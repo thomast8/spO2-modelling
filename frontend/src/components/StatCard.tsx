@@ -27,7 +27,7 @@ export default function StatCard({ label, value, icon, color = "primary.main" }:
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            bgcolor: `${typeof color === "string" && color.includes(".") ? "" : ""}rgba(79,195,247,0.1)`,
+            bgcolor: "rgba(37,99,235,0.08)",
             color,
           }}
         >

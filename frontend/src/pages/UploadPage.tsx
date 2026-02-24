@@ -1,4 +1,4 @@
-import { CloudUpload as UploadIcon, Science as FitIcon } from "@mui/icons-material";
+import { CloudUpload as UploadIcon, Delete as DeleteIcon, Science as FitIcon } from "@mui/icons-material";
 import {
   Alert,
   Box,
@@ -18,6 +18,7 @@ import {
   TableContainer,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -25,7 +26,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { previewFit, saveFit } from "../api/fit";
 import { getHold, updateHold } from "../api/holds";
-import { listSessions, getSession, uploadSession } from "../api/sessions";
+import { deleteSession, listSessions, getSession, uploadSession } from "../api/sessions";
 import type {
   FitPrediction,
   FitPreviewResponse,
@@ -36,6 +37,7 @@ import type {
 import SpO2Chart from "../components/charts/SpO2Chart";
 
 const HOLD_TYPE_OPTIONS = ["untagged", "FRC", "RV", "FL"] as const;
+const HOLD_TYPE_LABELS: Record<string, string> = { untagged: "Skip" };
 const FIT_HOLD_TYPES: HoldType[] = ["FRC", "RV", "FL"];
 
 const PARAM_LABELS: Record<string, string> = {
@@ -117,7 +119,7 @@ function HoldCard({
           {HOLD_TYPE_OPTIONS.map((t) => (
             <Chip
               key={t}
-              label={t}
+              label={HOLD_TYPE_LABELS[t] ?? t}
               size="small"
               variant={currentType === t ? "filled" : "outlined"}
               color={currentType === t ? (t === "untagged" ? "default" : "primary") : "default"}
@@ -419,6 +421,29 @@ export default function UploadPage() {
     setSavedTypes(new Set());
   };
 
+  // Delete session mutation
+  const deleteMutation = useMutation({
+    mutationFn: deleteSession,
+    onSuccess: () => {
+      setSession(null);
+      setSelectedSessionId("new");
+      setFitResults(new Map());
+      setSelectedHoldIds([]);
+      setHoldTypeOverrides(new Map());
+      setSavedTypes(new Set());
+      queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
+  const handleDeleteSession = () => {
+    const id = activeSession?.id;
+    if (!id) return;
+    if (!window.confirm(
+      "Delete this session and all its holds? You can re-upload the same CSV to re-import it."
+    )) return;
+    deleteMutation.mutate(id);
+  };
+
   // Summary of selected types
   const selectedTypeSummary = useMemo(() => {
     return Array.from(selectedByType.entries())
@@ -427,7 +452,7 @@ export default function UploadPage() {
   }, [selectedByType]);
 
   return (
-    <Box>
+    <Box sx={{ pb: activeSession ? 10 : 0 }}>
       <Typography variant="h4" gutterBottom>
         Upload & Fit
       </Typography>
@@ -471,12 +496,12 @@ export default function UploadPage() {
                 textAlign: "center",
                 cursor: "pointer",
                 border: "2px dashed",
-                borderColor: isDragActive ? "primary.main" : "rgba(255,255,255,0.15)",
-                bgcolor: isDragActive ? "rgba(79,195,247,0.05)" : "transparent",
+                borderColor: isDragActive ? "primary.main" : "divider",
+                bgcolor: isDragActive ? "rgba(37,99,235,0.04)" : "transparent",
                 transition: "all 0.2s",
                 "&:hover": {
                   borderColor: "primary.main",
-                  bgcolor: "rgba(79,195,247,0.03)",
+                  bgcolor: "rgba(37,99,235,0.02)",
                 },
                 height: "100%",
                 display: "flex",
@@ -524,37 +549,19 @@ export default function UploadPage() {
               <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
                 <Chip label={activeSession.session_date} size="small" />
                 <Chip label={`${activeSession.holds.length} holds`} size="small" color="primary" />
+                <Tooltip title="Delete this session and re-upload the CSV. Useful when data processing has been updated and you want to re-import with the latest corrections applied.">
+                  <Button
+                    size="small"
+                    color="error"
+                    variant="outlined"
+                    startIcon={<DeleteIcon />}
+                    onClick={handleDeleteSession}
+                    disabled={deleteMutation.isPending}
+                  >
+                    {deleteMutation.isPending ? "Deleting..." : "Delete Session"}
+                  </Button>
+                </Tooltip>
               </Box>
-            </Box>
-
-            {/* Fit controls bar */}
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 2,
-                mb: 2,
-                p: 2,
-                bgcolor: "rgba(79,195,247,0.04)",
-                borderRadius: 2,
-                border: "1px solid rgba(79,195,247,0.12)",
-              }}
-            >
-              <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
-                {selectedHoldIds.length === 0
-                  ? "No holds selected — tag holds to include them in the fit"
-                  : `Selected: ${selectedTypeSummary}`}
-              </Typography>
-
-              <Button
-                variant="contained"
-                onClick={handleRunFit}
-                disabled={selectedByType.size === 0 || fitting}
-                startIcon={fitting ? <CircularProgress size={18} /> : <FitIcon />}
-                sx={{ minWidth: 120 }}
-              >
-                {fitting ? "Fitting..." : `Fit ${selectedByType.size > 1 ? `${selectedByType.size} Types` : "Model"}`}
-              </Button>
             </Box>
 
             {fitError && (
@@ -617,6 +624,44 @@ export default function UploadPage() {
             </>
           )}
         </>
+      )}
+
+      {/* Fixed bottom fit action bar */}
+      {activeSession && (
+        <Paper
+          elevation={4}
+          sx={{
+            position: "fixed",
+            bottom: 0,
+            left: { xs: 0, md: 240 },
+            right: 0,
+            zIndex: 20,
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            px: 3,
+            py: 1.5,
+            borderTop: "1px solid",
+            borderColor: "divider",
+            borderRadius: 0,
+          }}
+        >
+          <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
+            {selectedHoldIds.length === 0
+              ? "No holds selected \u2014 tag holds to include them in the fit"
+              : `Selected: ${selectedTypeSummary}`}
+          </Typography>
+
+          <Button
+            variant="contained"
+            onClick={handleRunFit}
+            disabled={selectedByType.size === 0 || fitting}
+            startIcon={fitting ? <CircularProgress size={18} /> : <FitIcon />}
+            sx={{ minWidth: 120 }}
+          >
+            {fitting ? "Fitting..." : `Fit ${selectedByType.size > 1 ? `${selectedByType.size} Types` : "Model"}`}
+          </Button>
+        </Paper>
       )}
     </Box>
   );
