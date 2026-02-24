@@ -2,7 +2,7 @@
 Model Fitting Engine
 ====================
 
-Fits Hill model parameters to SpO2 data using scipy's differential evolution
+Fits apnea model parameters to SpO2 data using scipy's differential evolution
 optimizer. Supports fitting across multiple holds simultaneously with
 per-hold-type parameter bounds.
 """
@@ -13,55 +13,52 @@ import numpy as np
 from loguru import logger
 from scipy.optimize import differential_evolution
 
-from app.services.hill_model import HillParams, compute_r_squared, predict_spo2
+from app.services.hill_model import ApneaModelParams, compute_r_squared, predict_spo2
 
 # Default parameter bounds per hold type
 # Format: {param_name: (lower, upper)}
 DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "FRC": {
-        "o2_start": (800, 1500),     # Smaller lung volume
-        "vo2": (100, 300),
-        "scale": (5, 50),
-        "p50": (15, 60),
+        "pao2_0": (80, 120),        # Smaller lung volume -> lower initial PAO2
+        "pvo2": (30, 50),
+        "tau_washout": (20, 100),    # Faster washout with less O2 reserve
+        "p50_base": (22, 32),
         "n": (2.0, 4.0),
-        "r_offset": (-5.0, 5.0),
-        "r_decay": (-3.0, 3.0),
-        "tau_decay": (10, 60),
-        "lag": (10, 30),
+        "bohr_coeff": (0.0, 0.10),
+        "lag": (5, 30),
+        "r_offset": (-3.0, 3.0),
     },
     "RV": {
-        "o2_start": (400, 1000),     # Minimal lung volume
-        "vo2": (100, 300),
-        "scale": (5, 50),
-        "p50": (15, 60),
+        "pao2_0": (70, 110),        # Minimal lung volume
+        "pvo2": (30, 50),
+        "tau_washout": (10, 80),     # Fastest washout
+        "p50_base": (22, 32),
         "n": (2.0, 4.0),
-        "r_offset": (-5.0, 5.0),
-        "r_decay": (-3.0, 3.0),
-        "tau_decay": (10, 60),
-        "lag": (10, 30),
+        "bohr_coeff": (0.0, 0.10),
+        "lag": (5, 30),
+        "r_offset": (-3.0, 3.0),
     },
     "FL": {
-        "o2_start": (1800, 2800),    # Full lungs
-        "vo2": (100, 300),
-        "scale": (5, 50),
-        "p50": (15, 60),
+        "pao2_0": (100, 145),       # Full lungs, potentially pre-oxygenated
+        "pvo2": (30, 50),
+        "tau_washout": (50, 250),    # Slowest washout, largest O2 reserve
+        "p50_base": (22, 32),
         "n": (2.0, 4.0),
-        "r_offset": (-5.0, 5.0),
-        "r_decay": (-3.0, 3.0),
-        "tau_decay": (20, 90),
-        "lag": (10, 30),
+        "bohr_coeff": (0.0, 0.10),
+        "lag": (5, 30),
+        "r_offset": (-3.0, 3.0),
     },
 }
 
-# Parameter names in order (matches HillParams dataclass field order)
-PARAM_NAMES = list(HillParams.__dataclass_fields__.keys())
+# Parameter names in order (matches ApneaModelParams dataclass field order)
+PARAM_NAMES = list(ApneaModelParams.__dataclass_fields__.keys())
 
 
 @dataclass
 class FitResult:
     """Result of a model fitting run."""
 
-    params: HillParams
+    params: ApneaModelParams
     r_squared: float
     r_squared_per_hold: list[float]
     objective_val: float
@@ -108,7 +105,7 @@ def fit_holds(
     maxiter: int = 5000,
     popsize: int = 60,
 ) -> FitResult:
-    """Fit Hill model to one or more holds of the same type.
+    """Fit apnea model to one or more holds of the same type.
 
     Args:
         hold_data: List of dicts, each with keys:
@@ -137,7 +134,7 @@ def fit_holds(
     )
 
     def objective(param_array: np.ndarray) -> float:
-        params = HillParams.from_array(param_array)
+        params = ApneaModelParams.from_array(param_array)
         total_error = 0.0
         for hold in hold_data:
             pred = predict_spo2(hold["elapsed_s"], params)
@@ -156,7 +153,7 @@ def fit_holds(
         recombination=0.9,
     )
 
-    fitted_params = HillParams.from_array(result.x)
+    fitted_params = ApneaModelParams.from_array(result.x)
 
     # Compute R² for each hold and predictions
     r2_per_hold = []

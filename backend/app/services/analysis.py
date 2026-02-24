@@ -3,7 +3,7 @@ Analysis Utilities
 ==================
 
 Tools for analyzing fitted models: threshold crossing prediction,
-VO2 sensitivity analysis, and desaturation rate computation.
+parameter sensitivity analysis, and desaturation rate computation.
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 from loguru import logger
 
-from app.services.hill_model import HillParams, predict_spo2
+from app.services.hill_model import ApneaModelParams, predict_spo2
 
 
 @dataclass
@@ -26,9 +26,9 @@ class ThresholdResult:
 
 @dataclass
 class SensitivityPoint:
-    """One point in a VO2 sensitivity analysis."""
+    """One point in a parameter sensitivity analysis."""
 
-    vo2: float
+    param_value: float
     pct_change: float
     crossing_time_s: float | None
     margin_s: float | None       # crossing_time - reference_time
@@ -52,7 +52,7 @@ def format_time(seconds: float) -> str:
 
 
 def find_threshold_time(
-    params: HillParams,
+    params: ApneaModelParams,
     threshold: float = 40.0,
     t_max: float = 800.0,
     dt: float = 0.5,
@@ -92,20 +92,23 @@ def find_threshold_time(
         )
 
 
-def sensitivity_vo2(
-    params: HillParams,
+def sensitivity_analysis(
+    params: ApneaModelParams,
+    param_name: str = "tau_washout",
     reference_time_s: float = 372.0,
     pct_range: list[int] | None = None,
     threshold: float = 40.0,
     t_max: float = 800.0,
     dt: float = 0.5,
 ) -> list[SensitivityPoint]:
-    """VO2 sensitivity analysis.
+    """Parameter sensitivity analysis.
 
-    Varies VO2 by percentage and reports how crossing time and margin change.
+    Varies a named parameter by percentage and reports how crossing time
+    and margin change.
 
     Args:
         params:          Base fitted parameters
+        param_name:      Parameter to vary (must be a field of ApneaModelParams)
         reference_time_s: Reference time to compute margin from (e.g., hold end)
         pct_range:       Percentage changes to test (default: -15 to +15 in steps of 5)
         threshold:       SpO2 threshold for crossing
@@ -118,22 +121,16 @@ def sensitivity_vo2(
     if pct_range is None:
         pct_range = list(range(-15, 16, 5))
 
+    if not hasattr(params, param_name):
+        raise ValueError(f"Unknown parameter: {param_name!r}")
+
+    base_value = getattr(params, param_name)
     t = np.arange(0, t_max, dt)
     results = []
 
     for pct in pct_range:
-        vo2_test = params.vo2 * (1 + pct / 100)
-        test_params = HillParams(
-            o2_start=params.o2_start,
-            vo2=vo2_test,
-            scale=params.scale,
-            p50=params.p50,
-            n=params.n,
-            r_offset=params.r_offset,
-            r_decay=params.r_decay,
-            tau_decay=params.tau_decay,
-            lag=params.lag,
-        )
+        test_value = base_value * (1 + pct / 100)
+        test_params = ApneaModelParams(**{**params.to_dict(), param_name: test_value})
 
         spo2 = predict_spo2(t, test_params)
 
@@ -147,7 +144,7 @@ def sensitivity_vo2(
         margin = crossing - reference_time_s if crossing else None
 
         results.append(SensitivityPoint(
-            vo2=vo2_test,
+            param_value=test_value,
             pct_change=float(pct),
             crossing_time_s=crossing,
             margin_s=margin,
@@ -158,7 +155,7 @@ def sensitivity_vo2(
 
 
 def desaturation_rate(
-    params: HillParams,
+    params: ApneaModelParams,
     time_points: list[float],
     dt: float = 0.5,
     t_max: float = 800.0,
@@ -194,14 +191,14 @@ def desaturation_rate(
 
 
 def generate_prediction_curve(
-    params: HillParams,
+    params: ApneaModelParams,
     t_max: float = 600.0,
     dt: float = 1.0,
 ) -> dict:
     """Generate a full prediction curve for visualization.
 
     Returns:
-        Dict with 't', 'spo2', 'components' keys
+        Dict with 't', 'spo2', 'spo2_base', 'pao2', 'p50_eff' keys
     """
     from app.services.hill_model import predict_spo2_components
 
@@ -212,6 +209,6 @@ def generate_prediction_curve(
         "t": t.tolist(),
         "spo2": components["total"].tolist(),
         "spo2_base": components["base"].tolist(),
-        "residual": components["residual"].tolist(),
-        "o2_remaining": components["o2_remaining"].tolist(),
+        "pao2": components["pao2"].tolist(),
+        "p50_eff": components["p50_eff"].tolist(),
     }

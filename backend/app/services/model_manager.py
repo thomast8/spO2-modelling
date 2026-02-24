@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db_models import FitBounds, ModelVersion
 from app.services.fitter import DEFAULT_BOUNDS, PARAM_NAMES
-from app.services.hill_model import HillParams
+from app.services.hill_model import ApneaModelParams
 
 
 async def seed_default_bounds(db: AsyncSession) -> None:
@@ -56,7 +56,7 @@ async def get_next_version(db: AsyncSession, hold_type: str) -> int:
 async def save_model_version(
     db: AsyncSession,
     hold_type: str,
-    params: HillParams,
+    params: ApneaModelParams,
     r_squared: float,
     objective_val: float,
     converged: bool,
@@ -69,7 +69,7 @@ async def save_model_version(
     Args:
         db: Database session
         hold_type: FRC, RV, or FL
-        params: Fitted Hill parameters
+        params: Fitted model parameters
         r_squared: Overall R-squared
         objective_val: Optimization objective value
         converged: Whether optimizer converged
@@ -97,15 +97,14 @@ async def save_model_version(
         hold_type=hold_type,
         version=version,
         is_active=set_active,
-        o2_start=params.o2_start,
-        vo2=params.vo2,
-        scale_param=params.scale,
-        p50=params.p50,
+        pao2_0=params.pao2_0,
+        pvo2=params.pvo2,
+        tau_washout=params.tau_washout,
+        p50_base=params.p50_base,
         n=params.n,
-        r_offset=params.r_offset,
-        r_decay=params.r_decay,
-        tau_decay=params.tau_decay,
+        bohr_coeff=params.bohr_coeff,
         lag=params.lag,
+        r_offset=params.r_offset,
         r_squared=r_squared,
         objective_val=objective_val,
         converged=converged,
