@@ -4,7 +4,6 @@ import {
   Dashboard as DashboardIcon,
   Menu as MenuIcon,
   ModelTraining as ModelIcon,
-  ShowChart as FitIcon,
 } from "@mui/icons-material";
 import {
   AppBar,
@@ -27,8 +26,7 @@ const DRAWER_WIDTH = 240;
 
 const navItems = [
   { label: "Dashboard", path: "/", icon: <DashboardIcon /> },
-  { label: "Upload", path: "/upload", icon: <UploadIcon /> },
-  { label: "Fit Model", path: "/fit", icon: <FitIcon /> },
+  { label: "Upload & Fit", path: "/upload", icon: <UploadIcon /> },
   { label: "Models", path: "/models", icon: <ModelIcon /> },
   { label: "Analysis", path: "/analysis", icon: <AnalysisIcon /> },
 ];
@@ -46,7 +44,7 @@ export default function Layout() {
         <Typography
           variant="h6"
           sx={{
-            background: "linear-gradient(135deg, #4fc3f7 0%, #ff7043 100%)",
+            background: "linear-gradient(135deg, #2563eb 0%, #d97706 100%)",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent",
             fontWeight: 800,
@@ -73,10 +71,10 @@ export default function Layout() {
               sx={{
                 borderRadius: 2,
                 mb: 0.5,
-                bgcolor: active ? "rgba(79, 195, 247, 0.12)" : "transparent",
+                bgcolor: active ? "rgba(37, 99, 235, 0.08)" : "transparent",
                 color: active ? "primary.main" : "text.secondary",
                 "&:hover": {
-                  bgcolor: active ? "rgba(79, 195, 247, 0.18)" : "rgba(255,255,255,0.04)",
+                  bgcolor: active ? "rgba(37, 99, 235, 0.12)" : "rgba(28,25,23,0.04)",
                 },
               }}
             >
@@ -104,7 +102,7 @@ export default function Layout() {
           elevation={0}
           sx={{
             bgcolor: "background.paper",
-            borderBottom: "1px solid rgba(255,255,255,0.06)",
+            borderBottom: "1px solid #e7e5e4",
           }}
         >
           <Toolbar>
@@ -130,7 +128,7 @@ export default function Layout() {
             width: DRAWER_WIDTH,
             boxSizing: "border-box",
             bgcolor: "background.paper",
-            borderRight: "1px solid rgba(255,255,255,0.06)",
+            borderRight: "1px solid #e7e5e4",
           },
         }}
       >

@@ -74,6 +74,96 @@ def _parse_date(date_str: str) -> date:
     raise ValueError(f"Cannot parse date: {date_str!r}")
 
 
+def _remove_ischaemic_dip(
+    spo2: np.ndarray,
+    elapsed_s: np.ndarray,
+    hr: np.ndarray,
+    dip_threshold: float = 2.0,
+    search_window_s: int = 120,
+    recovery_margin: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Replace initial ischaemic dip artifact with baseline SpO2.
+
+    At the start of some holds, SpO2 briefly drops due to ischaemic blood
+    pooling before the real desaturation begins. This function detects and
+    flattens that dip so it doesn't distort the model fit. It also fills
+    any time gaps left by missing readings during the dip.
+
+    Args:
+        spo2: SpO2 readings array
+        elapsed_s: Corresponding time array (seconds from hold start)
+        hr: Heart rate readings array
+        dip_threshold: Minimum drop from baseline to count as a dip
+        search_window_s: How far into the hold to scan for dips
+        recovery_margin: How close to baseline counts as "recovered"
+
+    Returns:
+        Tuple of (cleaned_spo2, filled_elapsed_s, filled_hr)
+    """
+    if len(spo2) < 3:
+        return spo2, elapsed_s, hr
+
+    baseline = spo2[0]
+
+    # Find first sample that dips below threshold within the search window
+    dip_start = None
+    for i in range(1, len(spo2)):
+        if elapsed_s[i] > search_window_s:
+            break
+        if spo2[i] < baseline - dip_threshold:
+            dip_start = i
+            break
+
+    if dip_start is None:
+        return spo2, elapsed_s, hr
+
+    # Find recovery point: first sample at or near baseline after the dip
+    recovery_end = None
+    for j in range(dip_start + 1, len(spo2)):
+        if elapsed_s[j] > search_window_s:
+            break
+        if spo2[j] >= baseline - recovery_margin:
+            recovery_end = j
+            break
+
+    if recovery_end is None:
+        return spo2, elapsed_s, hr
+
+    cleaned_spo2 = spo2.copy()
+    cleaned_spo2[dip_start:recovery_end] = baseline
+
+    # Fill any time gaps in the dip region with 1-second intervals
+    # This prevents holes in the chart where the sensor skipped readings
+    t_before = int(elapsed_s[dip_start - 1]) if dip_start > 0 else 0
+    t_after = int(elapsed_s[recovery_end])
+    gap_times = np.arange(t_before + 1, t_after)
+    existing_times = set(int(t) for t in elapsed_s[dip_start:recovery_end])
+    missing_times = np.array([t for t in gap_times if t not in existing_times])
+
+    if len(missing_times) > 0:
+        # Interpolate HR for the filled gap points
+        hr_baseline = hr[dip_start - 1] if dip_start > 0 else hr[0]
+        hr_recovery = hr[recovery_end]
+        fill_hr = np.linspace(hr_baseline, hr_recovery, len(missing_times))
+
+        elapsed_s = np.concatenate([elapsed_s, missing_times])
+        cleaned_spo2 = np.concatenate([cleaned_spo2, np.full(len(missing_times), baseline)])
+        hr = np.concatenate([hr, fill_hr])
+
+        # Sort all arrays by time
+        order = np.argsort(elapsed_s)
+        elapsed_s = elapsed_s[order]
+        cleaned_spo2 = cleaned_spo2[order]
+        hr = hr[order]
+
+    logger.info(
+        f"Removed ischaemic dip: t={t_before + 1}-{t_after - 1}s, "
+        f"filled {len(missing_times)} missing points, "
+        f"baseline={baseline}, min_dip={float(np.min(spo2[dip_start:recovery_end]))}"
+    )
+    return cleaned_spo2, elapsed_s, hr
+
+
 def parse_csv(csv_content: str | bytes) -> SessionData:
     """Parse a complete apnea session CSV file.
 
@@ -222,6 +312,9 @@ def parse_csv(csv_content: str | bytes) -> SessionData:
         elapsed = np.array([_parse_time_to_seconds(r["interval_time"]) for r in block])
         spo2 = np.array([r["spo2"] for r in block], dtype=float)
         hr = np.array([r["hr"] for r in block], dtype=float)
+
+        # Clean ischaemic dip artifact at hold start
+        spo2, elapsed, hr = _remove_ischaemic_dip(spo2, elapsed, hr)
 
         hold = HoldData(
             hold_number=hold_num,

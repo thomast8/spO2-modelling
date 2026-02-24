@@ -1,5 +1,5 @@
 import Plot from "react-plotly.js";
-import { chartColors, plotlyDarkLayout } from "../../theme";
+import { chartColors, plotlyLayout, spo2Colorscale } from "../../theme";
 import type { Data, Layout } from "plotly.js";
 
 interface SpO2ChartProps {
@@ -41,12 +41,25 @@ export default function SpO2Chart({
       x: observedT,
       y: observedSpo2,
       type: "scatter",
-      mode: "markers",
+      mode: "lines+markers",
       name: "Observed",
       marker: {
-        color: chartColors.spo2Data,
-        size: 4,
-        opacity: 0.7,
+        color: observedSpo2,
+        colorscale: spo2Colorscale,
+        cmin: 70,
+        cmax: 100,
+        size: 5,
+        showscale: true,
+        colorbar: {
+          title: { text: "SpO₂ %", font: { size: 11 } },
+          thickness: 12,
+          len: 0.6,
+          tickfont: { size: 10 },
+        },
+      },
+      line: {
+        color: "rgba(0,0,0,0.1)",
+        width: 1,
       },
     });
   }
@@ -91,14 +104,14 @@ export default function SpO2Chart({
   traces.push(...extraTraces);
 
   const layout: Partial<Layout> = {
-    ...plotlyDarkLayout,
+    ...plotlyLayout,
     title: title ? { text: title, font: { size: 14 } } : undefined,
     xaxis: {
-      ...plotlyDarkLayout.xaxis,
+      ...plotlyLayout.xaxis,
       title: { text: "Time (s)" },
     },
     yaxis: {
-      ...plotlyDarkLayout.yaxis,
+      ...plotlyLayout.yaxis,
       title: { text: "SpO₂ (%)" },
       range: [0, 105],
     },
@@ -106,7 +119,7 @@ export default function SpO2Chart({
       x: 1,
       xanchor: "right",
       y: 1,
-      bgcolor: "rgba(0,0,0,0.3)",
+      bgcolor: "rgba(255,255,255,0.85)",
       font: { size: 11 },
     },
     height,
@@ -124,7 +137,7 @@ export default function SpO2Chart({
         responsive: true,
       }}
       useResizeHandler
-      style={{ width: "100%" }}
+      style={{ width: "100%", height }}
     />
   );
 }

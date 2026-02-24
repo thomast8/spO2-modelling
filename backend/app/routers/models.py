@@ -2,19 +2,24 @@
 
 import json
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.db_models import ModelVersion
+from app.models.db_models import Hold, ModelVersion
 from app.models.schemas import (
     AllModelsResponse,
+    FitPrediction,
     HillParamsResponse,
     ModelVersionListResponse,
     ModelVersionResponse,
     PredictionCurveResponse,
 )
 from app.services.analysis import generate_prediction_curve
+from app.services.hill_model import compute_r_squared, predict_spo2
 from app.services.model_manager import activate_model, get_active_model, get_model_versions
 
 router = APIRouter(prefix="/models", tags=["models"])
@@ -133,3 +138,40 @@ async def predict_curve(
         residual=curve["residual"],
         o2_remaining=curve["o2_remaining"],
     )
+
+
+@router.get("/{model_id}/hold-predictions", response_model=list[FitPrediction])
+async def get_hold_predictions(
+    model_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Regenerate per-hold predictions from a saved model's parameters."""
+    model = await db.get(ModelVersion, model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail="Model version not found")
+
+    hold_ids = json.loads(model.hold_ids_json)
+    params = model.to_hill_params()
+
+    result = await db.execute(
+        select(Hold).where(Hold.id.in_(hold_ids)).options(selectinload(Hold.data_points))
+    )
+    holds = result.scalars().all()
+
+    predictions = []
+    for hold in holds:
+        elapsed_s = np.array([dp.elapsed_s for dp in hold.data_points], dtype=float)
+        observed = np.array([dp.spo2 for dp in hold.data_points], dtype=float)
+        predicted = predict_spo2(elapsed_s, params)
+        r2 = compute_r_squared(observed, predicted)
+        predictions.append(
+            FitPrediction(
+                hold_id=hold.id,
+                elapsed_s=elapsed_s.tolist(),
+                observed=observed.tolist(),
+                predicted=predicted.tolist(),
+                r_squared=float(r2),
+            )
+        )
+
+    return predictions

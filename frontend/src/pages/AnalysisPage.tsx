@@ -210,7 +210,7 @@ export default function AnalysisPage() {
                       {sensitivity.map((s) => (
                         <TableRow
                           key={s.pct_change}
-                          sx={{ bgcolor: s.pct_change === 0 ? "rgba(79,195,247,0.05)" : "transparent" }}
+                          sx={{ bgcolor: s.pct_change === 0 ? "rgba(37,99,235,0.05)" : "transparent" }}
                         >
                           <TableCell sx={{ fontWeight: s.pct_change === 0 ? 700 : 400 }}>
                             {s.pct_change > 0 ? "+" : ""}{s.pct_change}%

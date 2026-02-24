@@ -1,6 +1,7 @@
 import api from "./client";
 import type {
   AllModelsResponse,
+  FitPrediction,
   ModelVersionListResponse,
   ModelVersionResponse,
   PredictionCurve,
@@ -34,5 +35,10 @@ export async function getPredictionCurve(
   const { data } = await api.get<PredictionCurve>(`/models/${modelId}/predict`, {
     params: { t_max: tMax, dt },
   });
+  return data;
+}
+
+export async function getHoldPredictions(modelId: number): Promise<FitPrediction[]> {
+  const { data } = await api.get<FitPrediction[]>(`/models/${modelId}/hold-predictions`);
   return data;
 }

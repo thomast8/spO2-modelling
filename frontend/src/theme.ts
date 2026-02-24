@@ -1,34 +1,34 @@
 import { createTheme } from "@mui/material/styles";
 
-export const darkTheme = createTheme({
+export const theme = createTheme({
   palette: {
-    mode: "dark",
+    mode: "light",
     primary: {
-      main: "#4fc3f7",
-      light: "#8bf6ff",
-      dark: "#0093c4",
+      main: "#2563eb",
+      light: "#60a5fa",
+      dark: "#1d4ed8",
     },
     secondary: {
-      main: "#ff7043",
-      light: "#ffa270",
-      dark: "#c63f17",
+      main: "#d97706",
+      light: "#fbbf24",
+      dark: "#b45309",
     },
     background: {
-      default: "#0a0e17",
-      paper: "#111827",
+      default: "#faf8f5",
+      paper: "#ffffff",
     },
     success: {
-      main: "#66bb6a",
+      main: "#16a34a",
     },
     warning: {
-      main: "#ffa726",
+      main: "#d97706",
     },
     error: {
-      main: "#ef5350",
+      main: "#dc2626",
     },
     text: {
-      primary: "#e2e8f0",
-      secondary: "#94a3b8",
+      primary: "#1c1917",
+      secondary: "#78716c",
     },
   },
   typography: {
@@ -53,7 +53,7 @@ export const darkTheme = createTheme({
       styleOverrides: {
         root: {
           backgroundImage: "none",
-          border: "1px solid rgba(255, 255, 255, 0.06)",
+          boxShadow: "0 1px 3px rgba(28,25,23,0.08)",
         },
       },
     },
@@ -76,22 +76,22 @@ export const darkTheme = createTheme({
   },
 });
 
-// Plotly dark theme layout defaults
-export const plotlyDarkLayout: Partial<Plotly.Layout> = {
+// Plotly light theme layout defaults
+export const plotlyLayout: Partial<Plotly.Layout> = {
   paper_bgcolor: "transparent",
-  plot_bgcolor: "rgba(17, 24, 39, 0.8)",
+  plot_bgcolor: "#ffffff",
   font: {
     family: "Inter, Roboto, sans-serif",
-    color: "#e2e8f0",
+    color: "#1c1917",
     size: 12,
   },
   xaxis: {
-    gridcolor: "rgba(148, 163, 184, 0.1)",
-    zerolinecolor: "rgba(148, 163, 184, 0.2)",
+    gridcolor: "rgba(120,113,108,0.12)",
+    zerolinecolor: "rgba(120,113,108,0.2)",
   },
   yaxis: {
-    gridcolor: "rgba(148, 163, 184, 0.1)",
-    zerolinecolor: "rgba(148, 163, 184, 0.2)",
+    gridcolor: "rgba(120,113,108,0.12)",
+    zerolinecolor: "rgba(120,113,108,0.2)",
   },
   margin: { l: 60, r: 20, t: 40, b: 50 },
 };
@@ -99,9 +99,17 @@ export const plotlyDarkLayout: Partial<Plotly.Layout> = {
 // Color palette for chart traces
 export const chartColors = {
   spo2Data: "#4fc3f7",
-  spo2Fit: "#ff7043",
-  hr: "#66bb6a",
-  threshold: "#ef5350",
-  residual: "#ffa726",
-  confidence: "rgba(79, 195, 247, 0.15)",
+  spo2Fit: "#2563eb",
+  hr: "#16a34a",
+  threshold: "#dc2626",
+  residual: "#d97706",
+  confidence: "rgba(37, 99, 235, 0.12)",
 };
+
+// SpO2 value-based colorscale: green (high) → yellow → orange → red (low)
+export const spo2Colorscale: [number, string][] = [
+  [0, "#ef5350"],
+  [0.33, "#ff7043"],
+  [0.66, "#ffa726"],
+  [1, "#66bb6a"],
+];
