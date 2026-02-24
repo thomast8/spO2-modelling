@@ -11,6 +11,7 @@ from loguru import logger
 
 from app.config import settings
 from app.database import async_session_factory, init_db
+from app.routers import analysis, bounds, fit, holds, models, sessions
 from app.services.model_manager import seed_default_bounds
 
 
@@ -49,6 +50,15 @@ app.add_middleware(
 async def health_check():
     """Health check endpoint for Railway."""
     return {"status": "ok", "app": settings.app_name}
+
+
+# API routers
+app.include_router(sessions.router, prefix="/api")
+app.include_router(holds.router, prefix="/api")
+app.include_router(fit.router, prefix="/api")
+app.include_router(models.router, prefix="/api")
+app.include_router(analysis.router, prefix="/api")
+app.include_router(bounds.router, prefix="/api")
 
 
 # Serve React build (static files)
