@@ -1,5 +1,6 @@
 import { Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
+import AboutModelPage from "./pages/AboutModelPage";
 import AnalysisPage from "./pages/AnalysisPage";
 import DashboardPage from "./pages/DashboardPage";
 import ModelsPage from "./pages/ModelsPage";
@@ -13,6 +14,7 @@ export default function App() {
         <Route path="/upload" element={<UploadPage />} />
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/analysis" element={<AnalysisPage />} />
+        <Route path="/about-model" element={<AboutModelPage />} />
       </Route>
     </Routes>
   );
