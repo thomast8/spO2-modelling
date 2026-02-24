@@ -12,14 +12,14 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.db_models import Hold
 from app.models.schemas import (
+    ApneaModelParamsResponse,
     FitPreviewRequest,
     FitPreviewResponse,
     FitSaveRequest,
-    HillParamsResponse,
     ModelVersionResponse,
 )
 from app.services.fitter import fit_holds
-from app.services.hill_model import HillParams
+from app.services.hill_model import ApneaModelParams
 from app.services.model_manager import save_model_version
 
 router = APIRouter(prefix="/fit", tags=["fit"])
@@ -82,7 +82,7 @@ async def preview_fit(
         raise HTTPException(status_code=500, detail=f"Fitting failed: {e}") from None
 
     return FitPreviewResponse(
-        params=HillParamsResponse(**fit_result.params.to_dict()),
+        params=ApneaModelParamsResponse(**fit_result.params.to_dict()),
         r_squared=fit_result.r_squared,
         r_squared_per_hold=fit_result.r_squared_per_hold,
         objective_val=fit_result.objective_val,
@@ -99,16 +99,15 @@ async def save_fit(
     db: AsyncSession = Depends(get_db),
 ):
     """Save a previewed fit as a new model version."""
-    params = HillParams(
-        o2_start=request.params.o2_start,
-        vo2=request.params.vo2,
-        scale=request.params.scale,
-        p50=request.params.p50,
+    params = ApneaModelParams(
+        pao2_0=request.params.pao2_0,
+        pvo2=request.params.pvo2,
+        tau_washout=request.params.tau_washout,
+        p50_base=request.params.p50_base,
         n=request.params.n,
-        r_offset=request.params.r_offset,
-        r_decay=request.params.r_decay,
-        tau_decay=request.params.tau_decay,
+        bohr_coeff=request.params.bohr_coeff,
         lag=request.params.lag,
+        r_offset=request.params.r_offset,
     )
 
     model = await save_model_version(
@@ -128,7 +127,7 @@ async def save_fit(
         hold_type=model.hold_type,
         version=model.version,
         is_active=model.is_active,
-        params=HillParamsResponse(**params.to_dict()),
+        params=ApneaModelParamsResponse(**params.to_dict()),
         r_squared=model.r_squared,
         objective_val=model.objective_val,
         converged=model.converged,

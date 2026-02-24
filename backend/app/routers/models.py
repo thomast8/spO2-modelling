@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.db_models import ModelVersion
 from app.models.schemas import (
     AllModelsResponse,
-    HillParamsResponse,
+    ApneaModelParamsResponse,
     ModelVersionListResponse,
     ModelVersionResponse,
     PredictionCurveResponse,
@@ -24,13 +24,13 @@ VALID_HOLD_TYPES = ("FRC", "RV", "FL")
 
 def _model_to_response(model: ModelVersion) -> ModelVersionResponse:
     """Convert ORM ModelVersion to response schema."""
-    params = model.to_hill_params()
+    params = model.to_model_params()
     return ModelVersionResponse(
         id=model.id,
         hold_type=model.hold_type,
         version=model.version,
         is_active=model.is_active,
-        params=HillParamsResponse(**params.to_dict()),
+        params=ApneaModelParamsResponse(**params.to_dict()),
         r_squared=model.r_squared,
         objective_val=model.objective_val,
         converged=model.converged,
@@ -123,13 +123,13 @@ async def predict_curve(
     if not model:
         raise HTTPException(status_code=404, detail="Model version not found")
 
-    params = model.to_hill_params()
+    params = model.to_model_params()
     curve = generate_prediction_curve(params, t_max=t_max, dt=dt)
 
     return PredictionCurveResponse(
         t=curve["t"],
         spo2=curve["spo2"],
         spo2_base=curve["spo2_base"],
-        residual=curve["residual"],
-        o2_remaining=curve["o2_remaining"],
+        pao2=curve["pao2"],
+        p50_eff=curve["p50_eff"],
     )
