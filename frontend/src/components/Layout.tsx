@@ -4,7 +4,6 @@ import {
   Dashboard as DashboardIcon,
   Menu as MenuIcon,
   ModelTraining as ModelIcon,
-  ShowChart as FitIcon,
 } from "@mui/icons-material";
 import {
   AppBar,
@@ -27,8 +26,7 @@ const DRAWER_WIDTH = 240;
 
 const navItems = [
   { label: "Dashboard", path: "/", icon: <DashboardIcon /> },
-  { label: "Upload", path: "/upload", icon: <UploadIcon /> },
-  { label: "Fit Model", path: "/fit", icon: <FitIcon /> },
+  { label: "Upload & Fit", path: "/upload", icon: <UploadIcon /> },
   { label: "Models", path: "/models", icon: <ModelIcon /> },
   { label: "Analysis", path: "/analysis", icon: <AnalysisIcon /> },
 ];

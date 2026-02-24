@@ -1,30 +1,66 @@
-import { CloudUpload as UploadIcon } from "@mui/icons-material";
+import { CloudUpload as UploadIcon, Science as FitIcon } from "@mui/icons-material";
 import {
   Alert,
   Box,
   Button,
   Chip,
   CircularProgress,
-  FormControlLabel,
+  Divider,
+  FormControl,
+  Grid,
+  InputLabel,
   MenuItem,
   Paper,
   Select,
-  Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableRow,
+  TextField,
   Typography,
 } from "@mui/material";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo, useState } from "react";
 import { useDropzone } from "react-dropzone";
-import { updateHold } from "../api/holds";
-import { uploadSession } from "../api/sessions";
-import type { HoldSummary, SessionResponse } from "../api/types";
+import { previewFit, saveFit } from "../api/fit";
+import { getHold, updateHold } from "../api/holds";
+import { listSessions, getSession, uploadSession } from "../api/sessions";
+import type {
+  FitPrediction,
+  FitPreviewResponse,
+  HoldSummary,
+  HoldType,
+  SessionResponse,
+} from "../api/types";
 import SpO2Chart from "../components/charts/SpO2Chart";
-import { getHold } from "../api/holds";
-import { useQuery } from "@tanstack/react-query";
 
-const HOLD_TYPES = ["untagged", "FRC", "RV", "FL"] as const;
+const HOLD_TYPE_OPTIONS = ["untagged", "FRC", "RV", "FL"] as const;
+const FIT_HOLD_TYPES: HoldType[] = ["FRC", "RV", "FL"];
 
-function HoldCard({ hold }: { hold: HoldSummary }) {
+const PARAM_LABELS: Record<string, string> = {
+  o2_start: "O\u2082 Start (mL)",
+  vo2: "VO\u2082 (mL/min)",
+  scale: "Scale",
+  p50: "P50 (mmHg)",
+  n: "Hill Coefficient",
+  r_offset: "Residual Offset",
+  r_decay: "Residual Decay",
+  tau_decay: "Tau Decay (s)",
+  lag: "Lag (s)",
+};
+
+// ── Hold card with optional fit overlay ──────────────────────
+
+function HoldCard({
+  hold,
+  prediction,
+  onTagChange,
+}: {
+  hold: HoldSummary;
+  prediction?: FitPrediction;
+  onTagChange?: (holdId: number, newType: string) => void;
+}) {
   const queryClient = useQueryClient();
 
   const { data: holdDetail } = useQuery({
@@ -33,68 +69,70 @@ function HoldCard({ hold }: { hold: HoldSummary }) {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (update: { hold_type?: string; include_in_fit?: boolean }) =>
+    mutationFn: (update: { hold_type?: string }) =>
       updateHold(hold.id, update),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["hold", hold.id] });
+      queryClient.invalidateQueries({ queryKey: ["session"] });
+      if (variables.hold_type && onTagChange) onTagChange(hold.id, variables.hold_type);
     },
   });
 
   const currentType = holdDetail?.hold_type ?? hold.hold_type;
-  const currentInclude = holdDetail?.include_in_fit ?? hold.include_in_fit;
+  const isTagged = currentType !== "untagged";
 
   return (
-    <Paper sx={{ p: 2, mb: 2 }}>
+    <Paper
+      sx={{
+        p: 2,
+        mb: 2,
+        border: isTagged ? "2px solid" : "2px solid transparent",
+        borderColor: isTagged ? "primary.main" : "transparent",
+        transition: "border-color 0.2s",
+      }}
+    >
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1.5 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Typography variant="h6" sx={{ fontSize: "1rem" }}>
             Hold {hold.hold_number}
           </Typography>
-          <Chip
-            label={`${hold.duration_s}s`}
-            size="small"
-            color="primary"
-            variant="outlined"
-          />
+          <Chip label={`${hold.duration_s}s`} size="small" color="primary" variant="outlined" />
           {hold.min_spo2 !== null && (
             <Chip
-              label={`Min SpO₂: ${hold.min_spo2}%`}
+              label={`Min SpO\u2082: ${hold.min_spo2}%`}
               size="small"
               color={hold.min_spo2 < 60 ? "error" : hold.min_spo2 < 80 ? "warning" : "default"}
               variant="outlined"
             />
           )}
+          {prediction && (
+            <Chip
+              label={`R\u00B2 = ${prediction.r_squared.toFixed(4)}`}
+              size="small"
+              color={prediction.r_squared > 0.95 ? "success" : prediction.r_squared > 0.9 ? "warning" : "error"}
+            />
+          )}
         </Box>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-          <Select
-            value={currentType}
-            onChange={(e) => updateMutation.mutate({ hold_type: e.target.value })}
-            size="small"
-            sx={{ minWidth: 100 }}
-          >
-            {HOLD_TYPES.map((t) => (
-              <MenuItem key={t} value={t}>
-                {t}
-              </MenuItem>
-            ))}
-          </Select>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={currentInclude}
-                onChange={(e) => updateMutation.mutate({ include_in_fit: e.target.checked })}
-                size="small"
-              />
-            }
-            label="Fit"
-            sx={{ "& .MuiTypography-root": { fontSize: "0.8rem" } }}
-          />
+        <Box sx={{ display: "flex", gap: 0.5 }}>
+          {HOLD_TYPE_OPTIONS.map((t) => (
+            <Chip
+              key={t}
+              label={t}
+              size="small"
+              variant={currentType === t ? "filled" : "outlined"}
+              color={currentType === t ? (t === "untagged" ? "default" : "primary") : "default"}
+              onClick={() => updateMutation.mutate({ hold_type: t })}
+              sx={{ cursor: "pointer", fontWeight: currentType === t ? 700 : 400 }}
+            />
+          ))}
         </Box>
       </Box>
       {holdDetail?.data_points && (
         <SpO2Chart
           observedT={holdDetail.data_points.map((dp) => dp.elapsed_s)}
           observedSpo2={holdDetail.data_points.map((dp) => dp.spo2)}
+          predictedT={prediction?.elapsed_s}
+          predictedSpo2={prediction?.predicted}
           height={200}
         />
       )}
@@ -102,20 +140,160 @@ function HoldCard({ hold }: { hold: HoldSummary }) {
   );
 }
 
+// ── Fit result card per hold type ────────────────────────────
+
+function FitResultCard({
+  holdType,
+  result,
+  notes,
+  onNotesChange,
+  onSave,
+  onDiscard,
+  saving,
+  saved,
+}: {
+  holdType: HoldType;
+  result: FitPreviewResponse;
+  notes: string;
+  onNotesChange: (v: string) => void;
+  onSave: () => void;
+  onDiscard: () => void;
+  saving: boolean;
+  saved: boolean;
+}) {
+  return (
+    <Paper sx={{ p: 3, mb: 3 }}>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
+        <Typography variant="h6">
+          {holdType} Fit Results
+        </Typography>
+        <Box sx={{ display: "flex", gap: 1 }}>
+          <Chip
+            label={`R\u00B2 = ${result.r_squared.toFixed(4)}`}
+            color={result.r_squared > 0.95 ? "success" : result.r_squared > 0.9 ? "warning" : "error"}
+          />
+          <Chip
+            label={result.converged ? "Converged" : "Not converged"}
+            color={result.converged ? "success" : "warning"}
+            variant="outlined"
+          />
+          <Chip label={`${result.n_holds} hold${result.n_holds !== 1 ? "s" : ""}`} size="small" variant="outlined" />
+        </Box>
+      </Box>
+
+      <TableContainer sx={{ mb: 3 }}>
+        <Table size="small">
+          <TableBody>
+            {Object.entries(result.params).map(([key, val]) => (
+              <TableRow key={key}>
+                <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
+                  {PARAM_LABELS[key] ?? key}
+                </TableCell>
+                <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
+                  {typeof val === "number" ? val.toFixed(4) : val}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <Divider sx={{ mb: 2 }} />
+
+      <Grid container spacing={2} alignItems="center">
+        <Grid size={{ xs: 12, sm: 7 }}>
+          <TextField
+            fullWidth
+            size="small"
+            label="Notes (optional)"
+            value={notes}
+            onChange={(e) => onNotesChange(e.target.value)}
+            placeholder={`e.g., ${holdType} model from session data`}
+          />
+        </Grid>
+        <Grid size={{ xs: 6, sm: 2.5 }}>
+          <Button
+            variant="contained"
+            color="success"
+            fullWidth
+            onClick={onSave}
+            disabled={saving || saved}
+          >
+            {saving ? <CircularProgress size={22} /> : saved ? "Saved" : `Save ${holdType}`}
+          </Button>
+        </Grid>
+        <Grid size={{ xs: 6, sm: 2.5 }}>
+          <Button
+            variant="outlined"
+            color="error"
+            fullWidth
+            onClick={onDiscard}
+            disabled={saved}
+          >
+            Discard
+          </Button>
+        </Grid>
+      </Grid>
+      {saved && (
+        <Alert severity="success" sx={{ mt: 2 }}>
+          {holdType} model saved successfully!
+        </Alert>
+      )}
+    </Paper>
+  );
+}
+
+// ── Main page ────────────────────────────────────────────────
+
 export default function UploadPage() {
   const queryClient = useQueryClient();
-  const [session, setSession] = useState<SessionResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
+  // Upload state
+  const [session, setSession] = useState<SessionResponse | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<number | "new">("new");
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Fit state — selected hold IDs (across all types)
+  const [selectedHoldIds, setSelectedHoldIds] = useState<number[]>([]);
+  // Local hold type overrides (tracks user tag changes that may not yet be in activeSession)
+  const [holdTypeOverrides, setHoldTypeOverrides] = useState<Map<number, string>>(new Map());
+  const [fitError, setFitError] = useState<string | null>(null);
+  // Results keyed by hold type
+  const [fitResults, setFitResults] = useState<Map<HoldType, FitPreviewResponse>>(new Map());
+  const [fitNotes, setFitNotes] = useState<Map<HoldType, string>>(new Map());
+  const [savedTypes, setSavedTypes] = useState<Set<HoldType>>(new Set());
+  const [fitting, setFitting] = useState(false);
+
+  // Existing sessions
+  const { data: sessions } = useQuery({
+    queryKey: ["sessions"],
+    queryFn: listSessions,
+  });
+
+  // Load existing session detail
+  const { data: existingSession } = useQuery({
+    queryKey: ["session", selectedSessionId],
+    queryFn: () => getSession(selectedSessionId as number),
+    enabled: typeof selectedSessionId === "number",
+  });
+
+  const activeSession = session ?? existingSession ?? null;
+
+  // Upload mutation
   const uploadMutation = useMutation({
     mutationFn: uploadSession,
     onSuccess: (data) => {
       setSession(data);
-      setError(null);
+      setSelectedSessionId("new");
+      setUploadError(null);
+      setFitResults(new Map());
+      setSelectedHoldIds([]);
+      setHoldTypeOverrides(new Map());
+      setSavedTypes(new Set());
       queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
     onError: (err: { response?: { data?: { detail?: string } } }) => {
-      setError(err.response?.data?.detail ?? "Upload failed");
+      setUploadError(err.response?.data?.detail ?? "Upload failed");
     },
   });
 
@@ -134,79 +312,311 @@ export default function UploadPage() {
     multiple: false,
   });
 
+  // Resolve hold type: local override takes priority over session data
+  const getHoldType = useCallback(
+    (hold: HoldSummary) => holdTypeOverrides.get(hold.id) ?? hold.hold_type,
+    [holdTypeOverrides],
+  );
+
+  // Group selected holds by type for the fit
+  const selectedByType = useMemo(() => {
+    if (!activeSession) return new Map<HoldType, number[]>();
+    const map = new Map<HoldType, number[]>();
+    for (const hold of activeSession.holds) {
+      const type = getHoldType(hold);
+      if (selectedHoldIds.includes(hold.id) && type !== "untagged") {
+        const ids = map.get(type as HoldType) ?? [];
+        ids.push(hold.id);
+        map.set(type as HoldType, ids);
+      }
+    }
+    return map;
+  }, [activeSession, selectedHoldIds, getHoldType]);
+
+  // Build prediction lookup across all fit results
+  const predictionMap = useMemo(() => {
+    const map = new Map<number, FitPrediction>();
+    for (const result of fitResults.values()) {
+      for (const p of result.predictions) {
+        map.set(p.hold_id, p);
+      }
+    }
+    return map;
+  }, [fitResults]);
+
+  // Save mutation
+  const saveMutation = useMutation({
+    mutationFn: saveFit,
+    onSuccess: (_data, variables) => {
+      setSavedTypes((prev) => new Set(prev).add(variables.hold_type as HoldType));
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+    },
+  });
+
+  // Run fit for all selected types in parallel
+  const handleRunFit = async () => {
+    if (selectedByType.size === 0) return;
+    setFitError(null);
+    setFitting(true);
+    setFitResults(new Map());
+    setSavedTypes(new Set());
+
+    const newResults = new Map<HoldType, FitPreviewResponse>();
+    const errors: string[] = [];
+
+    await Promise.all(
+      Array.from(selectedByType.entries()).map(async ([holdType, holdIds]) => {
+        try {
+          const result = await previewFit({ hold_type: holdType, hold_ids: holdIds });
+          newResults.set(holdType, result);
+        } catch (err: any) {
+          errors.push(`${holdType}: ${err.response?.data?.detail ?? "Fit failed"}`);
+        }
+      }),
+    );
+
+    setFitResults(newResults);
+    if (errors.length > 0) setFitError(errors.join("; "));
+    setFitting(false);
+  };
+
+  const handleSave = (holdType: HoldType) => {
+    const result = fitResults.get(holdType);
+    if (!result) return;
+    const holdIds = selectedByType.get(holdType) ?? [];
+    saveMutation.mutate({
+      hold_type: holdType,
+      params: result.params,
+      hold_ids: holdIds,
+      r_squared: result.r_squared,
+      objective_val: result.objective_val,
+      converged: result.converged,
+      notes: fitNotes.get(holdType) || undefined,
+      set_active: true,
+    });
+  };
+
+  const handleDiscard = (holdType: HoldType) => {
+    setFitResults((prev) => {
+      const next = new Map(prev);
+      next.delete(holdType);
+      return next;
+    });
+  };
+
+  const handleSaveAll = () => {
+    for (const holdType of fitResults.keys()) {
+      if (!savedTypes.has(holdType)) handleSave(holdType);
+    }
+  };
+
+  const handleSelectExistingSession = (id: number | "new") => {
+    setSelectedSessionId(id);
+    setSession(null);
+    setFitResults(new Map());
+    setSelectedHoldIds([]);
+    setHoldTypeOverrides(new Map());
+    setSavedTypes(new Set());
+  };
+
+  // Summary of selected types
+  const selectedTypeSummary = useMemo(() => {
+    return Array.from(selectedByType.entries())
+      .map(([type, ids]) => `${ids.length} ${type}`)
+      .join(", ");
+  }, [selectedByType]);
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        Upload Session
+        Upload & Fit
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-        Upload a CSV file from your pulse oximeter to detect apnea holds.
+        Upload a CSV, tag holds, select them, and fit models for all selected types at once.
       </Typography>
 
-      {/* Dropzone */}
-      <Paper
-        {...getRootProps()}
-        sx={{
-          p: 6,
-          textAlign: "center",
-          cursor: "pointer",
-          border: "2px dashed",
-          borderColor: isDragActive ? "primary.main" : "rgba(255,255,255,0.15)",
-          bgcolor: isDragActive ? "rgba(79,195,247,0.05)" : "transparent",
-          transition: "all 0.2s",
-          "&:hover": {
-            borderColor: "primary.main",
-            bgcolor: "rgba(79,195,247,0.03)",
-          },
-          mb: 3,
-        }}
-      >
-        <input {...getInputProps()} />
-        {uploadMutation.isPending ? (
-          <CircularProgress />
-        ) : (
-          <>
-            <UploadIcon sx={{ fontSize: 48, color: "text.secondary", mb: 1 }} />
-            <Typography variant="h6" color="text.secondary">
-              {isDragActive ? "Drop your CSV here" : "Drag & drop a CSV file, or click to browse"}
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Accepts .csv files from pulse oximeter sessions
-            </Typography>
-          </>
+      {/* ── Section 1: Upload / Select Session ─────────────────── */}
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Typography variant="h6" sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1 }}>
+          <UploadIcon fontSize="small" />
+          Session
+        </Typography>
+
+        <Grid container spacing={2} alignItems="stretch">
+          <Grid size={{ xs: 12, md: 4 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Load Existing Session</InputLabel>
+              <Select
+                value={selectedSessionId}
+                label="Load Existing Session"
+                onChange={(e) => handleSelectExistingSession(e.target.value as number | "new")}
+              >
+                <MenuItem value="new">
+                  <em>Upload New CSV</em>
+                </MenuItem>
+                {sessions?.map((s) => (
+                  <MenuItem key={s.id} value={s.id}>
+                    {s.name} ({s.session_date}) — {s.n_holds} holds
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Grid>
+
+          <Grid size={{ xs: 12, md: 8 }}>
+            <Paper
+              {...getRootProps()}
+              sx={{
+                p: 3,
+                textAlign: "center",
+                cursor: "pointer",
+                border: "2px dashed",
+                borderColor: isDragActive ? "primary.main" : "rgba(255,255,255,0.15)",
+                bgcolor: isDragActive ? "rgba(79,195,247,0.05)" : "transparent",
+                transition: "all 0.2s",
+                "&:hover": {
+                  borderColor: "primary.main",
+                  bgcolor: "rgba(79,195,247,0.03)",
+                },
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+                alignItems: "center",
+              }}
+            >
+              <input {...getInputProps()} />
+              {uploadMutation.isPending ? (
+                <CircularProgress />
+              ) : (
+                <>
+                  <UploadIcon sx={{ fontSize: 36, color: "text.secondary", mb: 0.5 }} />
+                  <Typography variant="body2" color="text.secondary">
+                    {isDragActive ? "Drop your CSV here" : "Drag & drop CSV, or click to browse"}
+                  </Typography>
+                </>
+              )}
+            </Paper>
+          </Grid>
+        </Grid>
+
+        {uploadError && (
+          <Alert severity="error" sx={{ mt: 2 }}>
+            {uploadError}
+          </Alert>
         )}
       </Paper>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
+      {/* ── Section 2: Holds — Tag & Select ────────────────────── */}
+      {activeSession && (
+        <>
+          <Paper sx={{ p: 3, mb: 3 }}>
+            <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
+              <Box>
+                <Typography variant="h6" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  <FitIcon fontSize="small" />
+                  Holds — {activeSession.name}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Tag holds to select them for fitting. Fit all selected types at once.
+                </Typography>
+              </Box>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+                <Chip label={activeSession.session_date} size="small" />
+                <Chip label={`${activeSession.holds.length} holds`} size="small" color="primary" />
+              </Box>
+            </Box>
 
-      {/* Session result */}
-      {session && (
-        <Box>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
-            <Typography variant="h5">
-              {session.name}
-            </Typography>
-            <Chip label={session.session_date} size="small" />
-            <Chip label={`${session.holds.length} holds`} size="small" color="primary" />
-          </Box>
-
-          {session.holds.map((hold) => (
-            <HoldCard key={hold.id} hold={hold} />
-          ))}
-
-          <Box sx={{ mt: 2, textAlign: "center" }}>
-            <Button
-              variant="outlined"
-              onClick={() => setSession(null)}
+            {/* Fit controls bar */}
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 2,
+                mb: 2,
+                p: 2,
+                bgcolor: "rgba(79,195,247,0.04)",
+                borderRadius: 2,
+                border: "1px solid rgba(79,195,247,0.12)",
+              }}
             >
-              Upload Another
-            </Button>
-          </Box>
-        </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
+                {selectedHoldIds.length === 0
+                  ? "No holds selected — tag holds to include them in the fit"
+                  : `Selected: ${selectedTypeSummary}`}
+              </Typography>
+
+              <Button
+                variant="contained"
+                onClick={handleRunFit}
+                disabled={selectedByType.size === 0 || fitting}
+                startIcon={fitting ? <CircularProgress size={18} /> : <FitIcon />}
+                sx={{ minWidth: 120 }}
+              >
+                {fitting ? "Fitting..." : `Fit ${selectedByType.size > 1 ? `${selectedByType.size} Types` : "Model"}`}
+              </Button>
+            </Box>
+
+            {fitError && (
+              <Alert severity="error" sx={{ mb: 2 }}>
+                {fitError}
+              </Alert>
+            )}
+
+            {/* Hold cards */}
+            {activeSession.holds.map((hold) => (
+                <HoldCard
+                  key={hold.id}
+                  hold={hold}
+                  prediction={predictionMap.get(hold.id)}
+                  onTagChange={(holdId, newType) => {
+                    // Track the type change locally for immediate reactivity
+                    setHoldTypeOverrides((prev) => new Map(prev).set(holdId, newType));
+                    if (newType !== "untagged") {
+                      // Auto-select when tagged
+                      setSelectedHoldIds((prev) =>
+                        prev.includes(holdId) ? prev : [...prev, holdId],
+                      );
+                    } else {
+                      // Auto-deselect when untagged
+                      setSelectedHoldIds((prev) => prev.filter((id) => id !== holdId));
+                    }
+                  }}
+                />
+            ))}
+          </Paper>
+
+          {/* ── Section 3: Fit Results & Save ──────────────────── */}
+          {fitResults.size > 0 && (
+            <>
+              {fitResults.size > 1 && (
+                <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
+                  <Button
+                    variant="contained"
+                    color="success"
+                    onClick={handleSaveAll}
+                    disabled={savedTypes.size === fitResults.size || saveMutation.isPending}
+                  >
+                    Save All Models
+                  </Button>
+                </Box>
+              )}
+              {FIT_HOLD_TYPES.filter((t) => fitResults.has(t)).map((holdType) => (
+                <FitResultCard
+                  key={holdType}
+                  holdType={holdType}
+                  result={fitResults.get(holdType)!}
+                  notes={fitNotes.get(holdType) ?? ""}
+                  onNotesChange={(v) => setFitNotes((prev) => new Map(prev).set(holdType, v))}
+                  onSave={() => handleSave(holdType)}
+                  onDiscard={() => handleDiscard(holdType)}
+                  saving={saveMutation.isPending && saveMutation.variables?.hold_type === holdType}
+                  saved={savedTypes.has(holdType)}
+                />
+              ))}
+            </>
+          )}
+        </>
       )}
     </Box>
   );
