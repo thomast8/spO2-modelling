@@ -41,15 +41,14 @@ const HOLD_TYPE_LABELS: Record<string, string> = { untagged: "Skip" };
 const FIT_HOLD_TYPES: HoldType[] = ["FRC", "RV", "FL"];
 
 const PARAM_LABELS: Record<string, string> = {
-  o2_start: "O\u2082 Start (mL)",
-  vo2: "VO\u2082 (mL/min)",
-  scale: "Scale",
-  p50: "P50 (mmHg)",
+  pao2_0: "PAO\u2082 Initial (mmHg)",
+  pvo2: "PvO\u2082 (mmHg)",
+  tau_washout: "\u03C4 Washout (s)",
+  p50_base: "P50 Base (mmHg)",
   n: "Hill Coefficient",
-  r_offset: "Residual Offset",
-  r_decay: "Residual Decay",
-  tau_decay: "Tau Decay (s)",
+  bohr_coeff: "Bohr Coeff (mmHg/s)",
   lag: "Lag (s)",
+  r_offset: "Offset (%)",
 };
 
 // ── Hold card with optional fit overlay ──────────────────────
