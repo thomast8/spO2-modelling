@@ -10,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from app.config import settings
-from app.database import init_db
+from app.database import async_session_factory, init_db
+from app.services.model_manager import seed_default_bounds
 
 
 @asynccontextmanager
@@ -19,6 +20,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name}")
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
     await init_db()
+    # Seed default fit bounds
+    async with async_session_factory() as db:
+        await seed_default_bounds(db)
+        await db.commit()
     logger.info(f"Database ready at {settings.db_path}")
     yield
     logger.info(f"Shutting down {settings.app_name}")
