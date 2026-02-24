@@ -1,4 +1,5 @@
 import {
+  ChevronRight as ChevronRightIcon,
   CloudUpload as UploadIcon,
   FolderOpen as SessionIcon,
   ModelTraining as ModelIcon,
@@ -6,10 +7,12 @@ import {
 import { Alert, Box, CircularProgress, Grid, Paper, Typography } from "@mui/material";
 import { useQuery } from "@tanstack/react-query";
 import { listAllModels } from "../api/models";
+import { useNavigate } from "react-router-dom";
 import { listSessions } from "../api/sessions";
 import StatCard from "../components/StatCard";
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const { data: sessions, isLoading: sessionsLoading } = useQuery({
     queryKey: ["sessions"],
     queryFn: listSessions,
@@ -100,14 +103,20 @@ export default function DashboardPage() {
           {sessions.slice(0, 5).map((s) => (
             <Box
               key={s.id}
+              onClick={() => navigate(`/upload?session=${s.id}`)}
               sx={{
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
                 py: 1.5,
+                px: 1.5,
                 borderBottom: "1px solid",
                 borderColor: "divider",
                 "&:last-child": { borderBottom: "none" },
+                cursor: "pointer",
+                borderRadius: 1,
+                transition: "background-color 0.15s",
+                "&:hover": { bgcolor: "rgba(37, 99, 235, 0.04)" },
               }}
             >
               <Box>
@@ -118,9 +127,12 @@ export default function DashboardPage() {
                   {s.csv_filename} — {s.session_date}
                 </Typography>
               </Box>
-              <Typography variant="body2" color="text.secondary">
-                {s.n_holds} holds
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Typography variant="body2" color="text.secondary">
+                  {s.n_holds} holds
+                </Typography>
+                <ChevronRightIcon sx={{ color: "text.secondary", fontSize: 20 }} />
+              </Box>
             </Box>
           ))}
         </Paper>

@@ -2,6 +2,7 @@ import {
   Assessment as AnalysisIcon,
   CloudUpload as UploadIcon,
   Dashboard as DashboardIcon,
+  MenuBook as AboutIcon,
   Menu as MenuIcon,
   ModelTraining as ModelIcon,
 } from "@mui/icons-material";
@@ -29,6 +30,7 @@ const navItems = [
   { label: "Upload & Fit", path: "/upload", icon: <UploadIcon /> },
   { label: "Models", path: "/models", icon: <ModelIcon /> },
   { label: "Analysis", path: "/analysis", icon: <AnalysisIcon /> },
+  { label: "About Model", path: "/about-model", icon: <AboutIcon /> },
 ];
 
 export default function Layout() {
