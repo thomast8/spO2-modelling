@@ -1,9 +1,9 @@
-"""Tests for the Hill model."""
+"""Tests for the apnea desaturation model."""
 
 import numpy as np
 
 from app.services.hill_model import (
-    HillParams,
+    ApneaModelParams,
     compute_r_squared,
     hill_spo2,
     predict_spo2,
@@ -11,24 +11,23 @@ from app.services.hill_model import (
 )
 
 
-def _default_params() -> HillParams:
+def _default_params() -> ApneaModelParams:
     """Reasonable FL parameters for testing."""
-    return HillParams(
-        o2_start=1966.0,
-        vo2=220.0,
-        scale=12.8,
-        p50=50.7,
-        n=4.0,
-        r_offset=0.0,
-        r_decay=0.0,
-        tau_decay=30.0,
-        lag=19.0,
+    return ApneaModelParams(
+        pao2_0=120.0,       # mmHg, full-lung pre-oxygenation
+        pvo2=40.0,          # mmHg, typical mixed venous
+        tau_washout=80.0,    # seconds
+        p50_base=26.6,       # mmHg, textbook
+        n=2.7,               # textbook
+        bohr_coeff=0.02,     # mmHg/s
+        lag=19.0,            # seconds
+        r_offset=0.0,        # no calibration bias
     )
 
 
 class TestHillSpo2:
     def test_returns_50_at_p50(self):
-        """SpO2 should be 50% when PaO2_eff equals P50."""
+        """SpO2 should be 50% when PaO2 equals P50."""
         result = hill_spo2(np.array([26.6]), p50=26.6, n=2.7)
         assert abs(result[0] - 50.0) < 0.01
 
@@ -48,6 +47,14 @@ class TestHillSpo2:
         spo2 = hill_spo2(pao2, p50=26.6, n=2.7)
         assert np.all(np.diff(spo2) > 0)
 
+    def test_accepts_array_p50(self):
+        """hill_spo2 should work with array p50 (for Bohr effect)."""
+        pao2 = np.array([60.0, 60.0, 60.0])
+        p50 = np.array([26.0, 30.0, 34.0])
+        result = hill_spo2(pao2, p50=p50, n=2.7)
+        # Higher P50 -> lower SpO2 at same PaO2
+        assert result[0] > result[1] > result[2]
+
 
 class TestPredictSpo2:
     def test_starts_near_100(self):
@@ -58,39 +65,55 @@ class TestPredictSpo2:
         assert result[0] > 95.0
 
     def test_decreases_over_time(self):
-        """SpO2 should decrease as O2 is consumed."""
+        """SpO2 should decrease as PAO2 declines."""
         params = _default_params()
         t = np.array([0.0, 120.0, 240.0, 360.0])
         result = predict_spo2(t, params)
-        # After lag, SpO2 should decrease
         assert result[-1] < result[0]
 
-    def test_residual_offset_shifts_curve(self):
+    def test_plateau_then_drop(self):
+        """SpO2 should stay high during plateau, then drop steeply.
+
+        This is the key behavioral test: exponential washout + Hill sigmoid
+        should naturally produce a flat plateau followed by steep desaturation.
+        """
+        params = _default_params()
+        t = np.arange(0, 400, 1.0)
+        spo2 = predict_spo2(t, params)
+
+        # During lag + early plateau, SpO2 should stay very high
+        plateau_mask = t < 60
+        assert np.all(spo2[plateau_mask] > 95.0), "SpO2 should stay >95% during early plateau"
+
+        # At late times, SpO2 should have dropped significantly
+        assert spo2[-1] < 70.0, "SpO2 should drop well below 70% by t=400"
+
+    def test_r_offset_shifts_curve(self):
         """Positive r_offset should shift entire curve up."""
         params_base = _default_params()
-        params_shifted = HillParams(**{**params_base.to_dict(), "r_offset": 2.0})
+        params_shifted = ApneaModelParams(**{**params_base.to_dict(), "r_offset": 2.0})
 
         t = np.array([60.0, 120.0, 180.0])
         base = predict_spo2(t, params_base)
         shifted = predict_spo2(t, params_shifted)
 
-        # Shifted should be higher (within clip bounds)
         assert np.all(shifted >= base - 0.01)
 
-    def test_residual_decay_affects_early_times(self):
-        """r_decay should have more effect at early times."""
-        params = HillParams(**{**_default_params().to_dict(), "r_decay": 5.0})
-        t = np.array([1.0, 300.0])
-        spo2 = predict_spo2(t, params)
-        # The effect should be larger at t=1 than t=300
-        base = predict_spo2(t, _default_params())
-        diff_early = spo2[0] - base[0]
-        diff_late = spo2[1] - base[1]
-        assert diff_early > diff_late
+    def test_bohr_effect_accelerates_late_desaturation(self):
+        """Positive bohr_coeff should cause lower SpO2 at late times."""
+        params_no_bohr = ApneaModelParams(**{**_default_params().to_dict(), "bohr_coeff": 0.0})
+        params_bohr = ApneaModelParams(**{**_default_params().to_dict(), "bohr_coeff": 0.05})
+
+        t = np.array([200.0, 300.0])
+        spo2_no_bohr = predict_spo2(t, params_no_bohr)
+        spo2_bohr = predict_spo2(t, params_bohr)
+
+        # Bohr effect should lower SpO2 at late times
+        assert np.all(spo2_bohr < spo2_no_bohr)
 
     def test_clipped_to_0_100(self):
         """Output should always be between 0 and 100."""
-        params = HillParams(**{**_default_params().to_dict(), "r_offset": 50.0})
+        params = ApneaModelParams(**{**_default_params().to_dict(), "r_offset": 50.0})
         t = np.linspace(0, 600, 100)
         result = predict_spo2(t, params)
         assert np.all(result >= 0.0)
@@ -98,43 +121,61 @@ class TestPredictSpo2:
 
 
 class TestPredictComponents:
-    def test_components_sum_to_total(self):
-        """Base + residual should approximate total (before clipping)."""
+    def test_base_plus_offset_equals_total(self):
+        """base + r_offset should approximate total (before clipping)."""
         params = _default_params()
         t = np.linspace(0, 300, 50)
         components = predict_spo2_components(t, params)
 
-        # Total = clip(base + residual, 0, 100)
-        expected = np.clip(components["base"] + components["residual"], 0, 100)
+        expected = np.clip(components["base"] + params.r_offset, 0, 100)
         np.testing.assert_allclose(components["total"], expected, atol=0.01)
 
-    def test_o2_remaining_decreases(self):
-        """O2 remaining should decrease over time (after lag)."""
+    def test_pao2_decreases(self):
+        """PAO2 should decrease over time (after lag)."""
         params = _default_params()
         t = np.linspace(20, 300, 50)
         components = predict_spo2_components(t, params)
-        assert np.all(np.diff(components["o2_remaining"]) <= 0)
+        assert np.all(np.diff(components["pao2"]) <= 0)
+
+    def test_pao2_decays_toward_pvo2(self):
+        """PAO2 should decay exponentially toward pvo2."""
+        params = _default_params()
+        t = np.linspace(20, 600, 100)
+        components = predict_spo2_components(t, params)
+        pao2 = components["pao2"]
+
+        # All values should be >= pvo2
+        assert np.all(pao2 >= params.pvo2 - 0.01)
+        # Late values should approach pvo2
+        assert pao2[-1] < params.pvo2 + 2.0
+
+    def test_p50_eff_increases(self):
+        """P50_eff should increase over time (Bohr effect)."""
+        params = _default_params()
+        t = np.linspace(20, 300, 50)
+        components = predict_spo2_components(t, params)
+        assert np.all(np.diff(components["p50_eff"]) >= 0)
 
 
-class TestHillParamsConversion:
+class TestApneaModelParamsConversion:
     def test_roundtrip_dict(self):
         """to_dict -> from_dict should be lossless."""
         params = _default_params()
-        reconstructed = HillParams.from_dict(params.to_dict())
+        reconstructed = ApneaModelParams.from_dict(params.to_dict())
         assert params == reconstructed
 
     def test_roundtrip_array(self):
         """to_array -> from_array should be lossless."""
         params = _default_params()
         arr = params.to_array()
-        reconstructed = HillParams.from_array(arr)
-        for field_name in HillParams.__dataclass_fields__:
+        reconstructed = ApneaModelParams.from_array(arr)
+        for field_name in ApneaModelParams.__dataclass_fields__:
             assert abs(getattr(params, field_name) - getattr(reconstructed, field_name)) < 1e-10
 
     def test_from_dict_ignores_extra_keys(self):
         """from_dict should ignore keys not in the dataclass."""
         d = {**_default_params().to_dict(), "extra_key": 42}
-        params = HillParams.from_dict(d)
+        params = ApneaModelParams.from_dict(d)
         assert params == _default_params()
 
 
