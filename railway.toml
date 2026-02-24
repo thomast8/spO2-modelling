@@ -5,3 +5,6 @@ dockerfilePath = "Dockerfile"
 healthcheckPath = "/api/health"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+
+# Volume: mount /app/data in Railway dashboard for SQLite persistence
+# Set SPO2_DB_PATH=/app/data/spo2.db (already the default)

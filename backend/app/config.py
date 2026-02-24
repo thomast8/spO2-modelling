@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     app_name: str = "SpO2 Modelling"
     debug: bool = False
 
+    # Server (Railway sets PORT automatically)
+    port: int = 8000
+
     # Database
     db_path: Path = Path(__file__).parent.parent.parent / "data" / "spo2.db"
 
