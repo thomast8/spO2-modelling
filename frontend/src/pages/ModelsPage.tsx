@@ -1,28 +1,53 @@
-import { CheckCircle, RadioButtonUnchecked } from "@mui/icons-material";
+import {
+  CheckCircle,
+  ExpandLess,
+  ExpandMore,
+  InfoOutlined as InfoIcon,
+  RadioButtonUnchecked,
+} from "@mui/icons-material";
 import {
   Alert,
   Box,
+  Button,
   Chip,
   CircularProgress,
+  Collapse,
   IconButton,
   Paper,
   Tab,
-  Tabs,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  Tabs,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import "katex/dist/katex.min.css";
 import { useState } from "react";
+import { InlineMath } from "react-katex";
+import { Link as RouterLink } from "react-router-dom";
 import { activateModel, getPredictionCurve, listAllModels } from "../api/models";
 import type { HoldType, ModelVersionResponse } from "../api/types";
 import SpO2Chart from "../components/charts/SpO2Chart";
+import { MODEL_SUMMARY, PARAM_DESCRIPTIONS } from "../constants/modelDescriptions";
 
 const HOLD_TYPES: HoldType[] = ["FRC", "RV", "FL"];
+
+const PARAM_LABELS: Record<string, string> = {
+  o2_start: "O\u2082 Start (mL)",
+  vo2: "VO\u2082 (mL/min)",
+  scale: "Scale",
+  p50: "P50 (mmHg)",
+  n: "Hill Coefficient",
+  r_offset: "Residual Offset",
+  r_decay: "Residual Decay",
+  tau_decay: "Tau Decay (s)",
+  lag: "Lag (s)",
+};
 
 function ModelDetail({ model }: { model: ModelVersionResponse }) {
   const { data: curve } = useQuery({
@@ -31,16 +56,106 @@ function ModelDetail({ model }: { model: ModelVersionResponse }) {
   });
 
   return (
-    <Box sx={{ mt: 2 }}>
-      {curve && (
-        <SpO2Chart
-          predictedT={curve.t}
-          predictedSpo2={curve.spo2}
-          title={`v${model.version} Prediction Curve`}
-          height={300}
-        />
-      )}
+    <Box sx={{ mt: 2, mb: 2 }}>
+      <Box sx={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {/* Parameter table with tooltips */}
+        <Table size="small" sx={{ maxWidth: 400 }}>
+          <TableBody>
+            {Object.entries(model.params).map(([key, val]) => (
+              <TableRow key={key}>
+                <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
+                  <Tooltip title={PARAM_DESCRIPTIONS[key] ?? ""} arrow placement="right">
+                    <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
+                      {PARAM_LABELS[key] ?? key}
+                      {PARAM_DESCRIPTIONS[key] && (
+                        <InfoIcon sx={{ fontSize: 14, color: "text.secondary" }} />
+                      )}
+                    </Box>
+                  </Tooltip>
+                </TableCell>
+                <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
+                  {typeof val === "number" ? val.toFixed(4) : val}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+
+        {/* Prediction curve */}
+        <Box sx={{ flex: 1, minWidth: 300 }}>
+          {curve && (
+            <SpO2Chart
+              predictedT={curve.t}
+              predictedSpo2={curve.spo2}
+              title={`v${model.version} Prediction Curve`}
+              height={280}
+            />
+          )}
+        </Box>
+      </Box>
     </Box>
+  );
+}
+
+function ModelSummaryCard() {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <Paper sx={{ p: 3, mb: 3 }}>
+      <Box
+        sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", cursor: "pointer" }}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="h6" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            {MODEL_SUMMARY.title}
+            <Chip label="Hill ODC" size="small" color="primary" variant="outlined" />
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {MODEL_SUMMARY.description}
+          </Typography>
+        </Box>
+        <IconButton size="small">
+          {expanded ? <ExpandLess /> : <ExpandMore />}
+        </IconButton>
+      </Box>
+
+      <Collapse in={expanded}>
+        <Box
+          sx={{
+            mt: 2,
+            p: 2,
+            bgcolor: "rgba(37, 99, 235, 0.04)",
+            borderRadius: 2,
+            display: "flex",
+            flexDirection: "column",
+            gap: 1.5,
+          }}
+        >
+          {MODEL_SUMMARY.equations.map((eq) => (
+            <Box key={eq.label} sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+              <Typography
+                component="span"
+                sx={{ fontWeight: 600, color: "text.secondary", fontSize: "0.8rem", minWidth: 110 }}
+              >
+                {eq.label}:
+              </Typography>
+              <InlineMath math={eq.latex} />
+            </Box>
+          ))}
+        </Box>
+        <Box sx={{ mt: 2, display: "flex", justifyContent: "flex-end" }}>
+          <Button
+            component={RouterLink}
+            to="/about-model"
+            size="small"
+            variant="text"
+          >
+            Learn more about the model
+          </Button>
+        </Box>
+      </Collapse>
+    </Paper>
   );
 }
 
@@ -81,6 +196,8 @@ export default function ModelsPage() {
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
         View, compare, and activate model versions for each hold type.
       </Typography>
+
+      <ModelSummaryCard />
 
       <Paper sx={{ mb: 3 }}>
         <Tabs
@@ -151,7 +268,7 @@ export default function ModelsPage() {
                     <TableCell>{v.converged ? "Yes" : "No"}</TableCell>
                     <TableCell>
                       <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {v.notes ?? "—"}
+                        {v.notes ?? "\u2014"}
                       </Typography>
                     </TableCell>
                     <TableCell>
