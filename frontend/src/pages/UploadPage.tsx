@@ -22,10 +22,12 @@ import {
   Typography,
 } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDropzone } from "react-dropzone";
+import { useSearchParams } from "react-router-dom";
 import { previewFit, saveFit } from "../api/fit";
 import { getHold, updateHold } from "../api/holds";
+import { getHoldPredictions, listAllModels } from "../api/models";
 import { deleteSession, listSessions, getSession, uploadSession } from "../api/sessions";
 import type {
   FitPrediction,
@@ -272,6 +274,8 @@ export default function UploadPage() {
     queryFn: listSessions,
   });
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // Load existing session detail
   const { data: existingSession } = useQuery({
     queryKey: ["session", selectedSessionId],
@@ -280,6 +284,44 @@ export default function UploadPage() {
   });
 
   const activeSession = session ?? existingSession ?? null;
+
+  // Load saved model predictions for existing sessions
+  const [savedPredictions, setSavedPredictions] = useState<Map<number, FitPrediction>>(new Map());
+  const { data: allModels } = useQuery({
+    queryKey: ["models"],
+    queryFn: listAllModels,
+    enabled: !!activeSession,
+  });
+
+  useEffect(() => {
+    if (!activeSession || !allModels) return;
+    const sessionHoldIds = new Set(activeSession.holds.map((h) => h.id));
+
+    const fetchPredictions = async () => {
+      const predMap = new Map<number, FitPrediction>();
+      for (const holdType of ["FRC", "RV", "FL"] as const) {
+        const typeData = allModels[holdType];
+        const activeModel = typeData.versions.find((v) => v.is_active);
+        if (!activeModel) continue;
+        const modelHoldIds = activeModel.hold_ids;
+        if (!modelHoldIds.some((id) => sessionHoldIds.has(id))) continue;
+
+        try {
+          const predictions = await getHoldPredictions(activeModel.id);
+          for (const pred of predictions) {
+            if (sessionHoldIds.has(pred.hold_id)) {
+              predMap.set(pred.hold_id, pred);
+            }
+          }
+        } catch {
+          // Model predictions unavailable — skip silently
+        }
+      }
+      setSavedPredictions(predMap);
+    };
+
+    fetchPredictions();
+  }, [activeSession?.id, allModels]);
 
   // Upload mutation
   const uploadMutation = useMutation({
@@ -335,16 +377,16 @@ export default function UploadPage() {
     return map;
   }, [activeSession, selectedHoldIds, getHoldType]);
 
-  // Build prediction lookup across all fit results
+  // Build prediction lookup: saved model predictions as base, fresh fit results on top
   const predictionMap = useMemo(() => {
-    const map = new Map<number, FitPrediction>();
+    const map = new Map<number, FitPrediction>(savedPredictions);
     for (const result of fitResults.values()) {
       for (const p of result.predictions) {
         map.set(p.hold_id, p);
       }
     }
     return map;
-  }, [fitResults]);
+  }, [savedPredictions, fitResults]);
 
   // Save mutation
   const saveMutation = useMutation({
@@ -412,14 +454,27 @@ export default function UploadPage() {
     }
   };
 
-  const handleSelectExistingSession = (id: number | "new") => {
+  const handleSelectExistingSession = useCallback((id: number | "new") => {
     setSelectedSessionId(id);
     setSession(null);
     setFitResults(new Map());
     setSelectedHoldIds([]);
     setHoldTypeOverrides(new Map());
     setSavedTypes(new Set());
-  };
+    setSavedPredictions(new Map());
+  }, []);
+
+  // Auto-select session from URL query param (e.g., /upload?session=123)
+  useEffect(() => {
+    const sessionParam = searchParams.get("session");
+    if (sessionParam && sessions) {
+      const id = parseInt(sessionParam, 10);
+      if (!isNaN(id) && sessions.some((s) => s.id === id)) {
+        handleSelectExistingSession(id);
+        setSearchParams({}, { replace: true });
+      }
+    }
+  }, [searchParams, sessions, handleSelectExistingSession, setSearchParams]);
 
   // Delete session mutation
   const deleteMutation = useMutation({
