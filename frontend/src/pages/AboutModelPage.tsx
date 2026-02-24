@@ -20,7 +20,12 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import "katex/dist/katex.min.css";
+import type { Data, Layout } from "plotly.js";
 import type { ReactElement } from "react";
+import { useMemo } from "react";
+import { BlockMath } from "react-katex";
+import Plot from "react-plotly.js";
 import {
   FITTING_DESCRIPTION,
   HOLD_TYPE_DESCRIPTIONS,
@@ -28,6 +33,7 @@ import {
   MODEL_SUMMARY,
   PARAM_DESCRIPTIONS,
 } from "../constants/modelDescriptions";
+import { chartColors, plotlyLayout } from "../theme";
 
 const PARAM_LABELS: Record<string, string> = {
   o2_start: "O\u2082 Start",
@@ -74,6 +80,313 @@ const COMPONENT_ICONS: Record<string, ReactElement> = {
 
 const HOLD_TYPE_ORDER = ["FRC", "RV", "FL"] as const;
 
+// Default parameters for demonstration charts (typical FL hold)
+const DEMO_PARAMS = {
+  o2_start: 2200,
+  vo2: 225,
+  scale: 20,
+  p50: 43,
+  n: 4.0,
+  r_offset: 5,
+  r_decay: 3,
+  tau_decay: 90,
+  lag: 12,
+};
+
+const CHART_HEIGHT = 280;
+
+const chartLayout: Partial<Layout> = {
+  ...plotlyLayout,
+  height: CHART_HEIGHT,
+  margin: { l: 55, r: 20, t: 35, b: 45 },
+  legend: {
+    x: 1,
+    xanchor: "right",
+    y: 1,
+    bgcolor: "rgba(255,255,255,0.85)",
+    font: { size: 11 },
+  },
+};
+
+// ── Helper: generate time array ──────────────────────────────
+function linspace(start: number, end: number, n: number): number[] {
+  const step = (end - start) / (n - 1);
+  return Array.from({ length: n }, (_, i) => start + i * step);
+}
+
+// ── Chart 1: O2 depletion over time ─────────────────────────
+function O2DepletionChart() {
+  const t = useMemo(() => linspace(0, 300, 200), []);
+
+  const traces: Data[] = useMemo(() => {
+    const holdTypes = [
+      { name: "FL (2200 mL)", o2: 2200, color: chartColors.spo2Fit },
+      { name: "FRC (1100 mL)", o2: 1100, color: chartColors.residual },
+      { name: "RV (600 mL)", o2: 600, color: chartColors.threshold },
+    ];
+    return holdTypes.map(({ name, o2, color }) => ({
+      x: t,
+      y: t.map((ti) => {
+        const tEff = Math.max(ti - DEMO_PARAMS.lag, 0);
+        return Math.max(o2 - (DEMO_PARAMS.vo2 / 60) * tEff, 0);
+      }),
+      type: "scatter" as const,
+      mode: "lines" as const,
+      name,
+      line: { color, width: 2.5 },
+    }));
+  }, [t]);
+
+  return (
+    <Plot
+      data={traces}
+      layout={{
+        ...chartLayout,
+        title: { text: "O\u2082 Stores Over Time", font: { size: 13 } },
+        xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
+        yaxis: { ...chartLayout.yaxis, title: { text: "O\u2082 remaining (mL)" } },
+      }}
+      config={{ displayModeBar: false, responsive: true }}
+      useResizeHandler
+      style={{ width: "100%", height: CHART_HEIGHT }}
+    />
+  );
+}
+
+// ── Chart 2: Hill dissociation curve ─────────────────────────
+function HillCurveChart() {
+  const pao2 = useMemo(() => linspace(0.1, 120, 300), []);
+
+  const traces: Data[] = useMemo(() => {
+    const hillCoeffs = [
+      { n: 2.0, name: "n = 2.0", color: chartColors.residual, dash: "dot" as const },
+      { n: 2.7, name: "n = 2.7 (physiological)", color: chartColors.spo2Fit, dash: "solid" as const },
+      { n: 4.0, name: "n = 4.0", color: chartColors.hr, dash: "dash" as const },
+    ];
+    const result: Data[] = hillCoeffs.map(({ n, name, color, dash }) => ({
+      x: pao2,
+      y: pao2.map((p) => 100 * Math.pow(p, n) / (Math.pow(p, n) + Math.pow(DEMO_PARAMS.p50, n))),
+      type: "scatter" as const,
+      mode: "lines" as const,
+      name,
+      line: { color, width: 2.5, dash },
+    }));
+    // P50 marker line
+    result.push({
+      x: [DEMO_PARAMS.p50, DEMO_PARAMS.p50],
+      y: [0, 50],
+      type: "scatter",
+      mode: "lines",
+      name: `P50 = ${DEMO_PARAMS.p50}`,
+      line: { color: "rgba(0,0,0,0.3)", width: 1, dash: "dot" },
+      showlegend: true,
+    });
+    result.push({
+      x: [0, DEMO_PARAMS.p50],
+      y: [50, 50],
+      type: "scatter",
+      mode: "lines",
+      line: { color: "rgba(0,0,0,0.3)", width: 1, dash: "dot" },
+      showlegend: false,
+    });
+    return result;
+  }, [pao2]);
+
+  return (
+    <Plot
+      data={traces}
+      layout={{
+        ...chartLayout,
+        title: { text: "Oxygen\u2013Haemoglobin Dissociation Curve", font: { size: 13 } },
+        xaxis: { ...chartLayout.xaxis, title: { text: "PaO\u2082 eff (mmHg-eq.)" } },
+        yaxis: { ...chartLayout.yaxis, title: { text: "SpO\u2082 (%)" }, range: [0, 105] },
+      }}
+      config={{ displayModeBar: false, responsive: true }}
+      useResizeHandler
+      style={{ width: "100%", height: CHART_HEIGHT }}
+    />
+  );
+}
+
+// ── Chart 3: Residual correction over time ───────────────────
+function ResidualChart() {
+  const t = useMemo(() => linspace(0, 300, 200), []);
+
+  const traces: Data[] = useMemo(() => [
+    {
+      x: t,
+      y: t.map((ti) =>
+        DEMO_PARAMS.r_offset + DEMO_PARAMS.r_decay * Math.exp(-ti / DEMO_PARAMS.tau_decay),
+      ),
+      type: "scatter" as const,
+      mode: "lines" as const,
+      name: "Total residual",
+      line: { color: chartColors.spo2Fit, width: 2.5 },
+    },
+    {
+      x: t,
+      y: t.map(() => DEMO_PARAMS.r_offset),
+      type: "scatter" as const,
+      mode: "lines" as const,
+      name: `r_offset = ${DEMO_PARAMS.r_offset}`,
+      line: { color: chartColors.residual, width: 1.5, dash: "dash" as const },
+    },
+    {
+      x: t,
+      y: t.map((ti) =>
+        DEMO_PARAMS.r_decay * Math.exp(-ti / DEMO_PARAMS.tau_decay),
+      ),
+      type: "scatter" as const,
+      mode: "lines" as const,
+      name: "Transient decay",
+      line: { color: chartColors.threshold, width: 1.5, dash: "dot" as const },
+    },
+  ], [t]);
+
+  return (
+    <Plot
+      data={traces}
+      layout={{
+        ...chartLayout,
+        title: { text: "Residual Correction Components", font: { size: 13 } },
+        xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
+        yaxis: { ...chartLayout.yaxis, title: { text: "Residual (% SpO\u2082)" } },
+      }}
+      config={{ displayModeBar: false, responsive: true }}
+      useResizeHandler
+      style={{ width: "100%", height: CHART_HEIGHT }}
+    />
+  );
+}
+
+// ── Chart 4: Lag effect comparison ───────────────────────────
+function LagChart() {
+  const t = useMemo(() => linspace(0, 300, 200), []);
+
+  const computeSpo2 = useMemo(() => (ti: number, lag: number) => {
+    const tEff = Math.max(ti - lag, 0);
+    const o2 = Math.max(DEMO_PARAMS.o2_start - (DEMO_PARAMS.vo2 / 60) * tEff, 0.01);
+    const pao2 = o2 / DEMO_PARAMS.scale;
+    const base = 100 * Math.pow(pao2, DEMO_PARAMS.n) /
+      (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(DEMO_PARAMS.p50, DEMO_PARAMS.n));
+    return Math.min(Math.max(base, 0), 100);
+  }, []);
+
+  const traces: Data[] = useMemo(() => [
+    {
+      x: t,
+      y: t.map((ti) => computeSpo2(ti, 0)),
+      type: "scatter" as const,
+      mode: "lines" as const,
+      name: "lag = 0 s (arterial)",
+      line: { color: "rgba(0,0,0,0.3)", width: 1.5, dash: "dot" as const },
+    },
+    {
+      x: t,
+      y: t.map((ti) => computeSpo2(ti, 12)),
+      type: "scatter" as const,
+      mode: "lines" as const,
+      name: "lag = 12 s",
+      line: { color: chartColors.spo2Fit, width: 2.5 },
+    },
+    {
+      x: t,
+      y: t.map((ti) => computeSpo2(ti, 25)),
+      type: "scatter" as const,
+      mode: "lines" as const,
+      name: "lag = 25 s",
+      line: { color: chartColors.threshold, width: 2, dash: "dash" as const },
+    },
+  ], [t, computeSpo2]);
+
+  return (
+    <Plot
+      data={traces}
+      layout={{
+        ...chartLayout,
+        title: { text: "Effect of Finger\u2013Arterial Lag", font: { size: 13 } },
+        xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
+        yaxis: { ...chartLayout.yaxis, title: { text: "SpO\u2082 (%)" }, range: [0, 105] },
+      }}
+      config={{ displayModeBar: false, responsive: true }}
+      useResizeHandler
+      style={{ width: "100%", height: CHART_HEIGHT }}
+    />
+  );
+}
+
+// ── Chart for full model ─────────────────────────────────────
+function FullModelChart() {
+  const t = useMemo(() => linspace(0, 300, 300), []);
+
+  const traces: Data[] = useMemo(() => {
+    const p = DEMO_PARAMS;
+    const base = t.map((ti) => {
+      const tEff = Math.max(ti - p.lag, 0);
+      const o2 = Math.max(p.o2_start - (p.vo2 / 60) * tEff, 0.01);
+      const pao2 = o2 / p.scale;
+      return 100 * Math.pow(pao2, p.n) / (Math.pow(pao2, p.n) + Math.pow(p.p50, p.n));
+    });
+    const residual = t.map((ti) => p.r_offset + p.r_decay * Math.exp(-ti / p.tau_decay));
+    const total = base.map((b, i) => Math.min(Math.max(b + residual[i], 0), 100));
+
+    return [
+      {
+        x: t, y: base,
+        type: "scatter" as const, mode: "lines" as const,
+        name: "SpO\u2082 base (Hill)",
+        line: { color: "rgba(37,99,235,0.4)", width: 1.5, dash: "dot" as const },
+      },
+      {
+        x: t, y: residual,
+        type: "scatter" as const, mode: "lines" as const,
+        name: "Residual correction",
+        line: { color: chartColors.residual, width: 1.5, dash: "dash" as const },
+        yaxis: "y2",
+      },
+      {
+        x: t, y: total,
+        type: "scatter" as const, mode: "lines" as const,
+        name: "Final SpO\u2082(t)",
+        line: { color: chartColors.spo2Fit, width: 3 },
+      },
+    ];
+  }, [t]);
+
+  return (
+    <Plot
+      data={traces}
+      layout={{
+        ...chartLayout,
+        height: 320,
+        title: { text: "Complete Model Output (FL hold, typical parameters)", font: { size: 13 } },
+        xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
+        yaxis: { ...chartLayout.yaxis, title: { text: "SpO\u2082 (%)" }, range: [0, 105] },
+        yaxis2: {
+          title: { text: "Residual (% SpO\u2082)" },
+          overlaying: "y",
+          side: "right",
+          showgrid: false,
+          range: [-2, 10],
+        },
+      }}
+      config={{ displayModeBar: false, responsive: true }}
+      useResizeHandler
+      style={{ width: "100%", height: 320 }}
+    />
+  );
+}
+
+// Map component icons to their charts
+const COMPONENT_CHARTS: Record<string, () => ReactElement> = {
+  lungs: () => <O2DepletionChart />,
+  curve: () => <HillCurveChart />,
+  correction: () => <ResidualChart />,
+  lag: () => <LagChart />,
+};
+
+// ── Section helpers ──────────────────────────────────────────
+
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <Typography variant="h5" sx={{ mt: 5, mb: 2 }}>
@@ -82,7 +395,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-function EquationBlock({ equation }: { equation: string }) {
+function LatexBlock({ latex }: { latex: string }) {
   return (
     <Box
       sx={{
@@ -93,16 +406,16 @@ function EquationBlock({ equation }: { equation: string }) {
         borderLeft: "3px solid",
         borderColor: "primary.main",
         borderRadius: 1,
-        fontFamily: "monospace",
-        fontSize: "0.95rem",
-        letterSpacing: "0.01em",
         overflowX: "auto",
+        "& .katex": { fontSize: "1.1em" },
       }}
     >
-      {equation}
+      <BlockMath math={latex} />
     </Box>
   );
 }
+
+// ── Main page ────────────────────────────────────────────────
 
 export default function AboutModelPage() {
   return (
@@ -115,12 +428,17 @@ export default function AboutModelPage() {
         {MODEL_SUMMARY.description}
       </Typography>
 
+      {/* ── Full model overview chart ──────────────────────────── */}
+      <Paper sx={{ p: 2, mt: 3 }}>
+        <FullModelChart />
+      </Paper>
+
       {/* ── Overview equations ──────────────────────────────────── */}
       <SectionTitle>Model Equations</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         The complete model is built from four layered equations. Each transforms
-        the output of the previous step, from raw O\u2082 stores down to the
-        final SpO\u2082 reading at the finger.
+        the output of the previous step, from raw O&#x2082; stores down to the
+        final SpO&#x2082; reading at the finger.
       </Typography>
       <Paper sx={{ p: 2.5 }}>
         {MODEL_SUMMARY.equations.map((eq, i) => (
@@ -128,17 +446,8 @@ export default function AboutModelPage() {
             <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
               {i + 1}. {eq.label}
             </Typography>
-            <Box
-              sx={{
-                fontFamily: "monospace",
-                fontSize: "0.9rem",
-                pl: 2,
-                py: 0.5,
-                borderLeft: "2px solid",
-                borderColor: "primary.light",
-              }}
-            >
-              {eq.formula}
+            <Box sx={{ pl: 1, "& .katex": { fontSize: "1.05em" } }}>
+              <BlockMath math={eq.latex} />
             </Box>
           </Box>
         ))}
@@ -147,59 +456,65 @@ export default function AboutModelPage() {
       {/* ── Model Components ───────────────────────────────────── */}
       <SectionTitle>Model Components</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        The model decomposes SpO\u2082 prediction into four physiological
+        The model decomposes SpO&#x2082; prediction into four physiological
         processes. Each section below explains the component, its equation, and
-        the parameters it uses.
+        includes an interactive chart showing how the component behaves.
       </Typography>
 
-      {MODEL_COMPONENTS.map((comp) => (
-        <Paper key={comp.title} sx={{ p: 3, mb: 3 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1.5 }}>
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 40,
-                height: 40,
-                borderRadius: 2,
-                bgcolor: "primary.main",
-                color: "white",
-              }}
-            >
-              {COMPONENT_ICONS[comp.icon] ?? <ScienceIcon />}
+      {MODEL_COMPONENTS.map((comp) => {
+        const ChartFn = COMPONENT_CHARTS[comp.icon];
+        return (
+          <Paper key={comp.title} sx={{ p: 3, mb: 3 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1.5 }}>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 40,
+                  height: 40,
+                  borderRadius: 2,
+                  bgcolor: "primary.main",
+                  color: "white",
+                }}
+              >
+                {COMPONENT_ICONS[comp.icon] ?? <ScienceIcon />}
+              </Box>
+              <Box>
+                <Typography variant="h6" sx={{ lineHeight: 1.2 }}>
+                  {comp.title}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {comp.summary}
+                </Typography>
+              </Box>
             </Box>
-            <Box>
-              <Typography variant="h6" sx={{ lineHeight: 1.2 }}>
-                {comp.title}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {comp.summary}
-              </Typography>
+
+            <LatexBlock latex={comp.latex} />
+
+            <Typography variant="body2" sx={{ mt: 2, mb: 2, lineHeight: 1.7 }}>
+              {comp.detail}
+            </Typography>
+
+            {/* Interactive chart for this component */}
+            {ChartFn && <ChartFn />}
+
+            <Box sx={{ mt: 2, display: "flex", gap: 1, flexWrap: "wrap" }}>
+              {comp.params.map((p) => (
+                <Tooltip key={p} title={PARAM_DESCRIPTIONS[p] ?? ""} arrow>
+                  <Chip
+                    icon={<InfoIcon sx={{ fontSize: 14 }} />}
+                    label={PARAM_LABELS[p] ?? p}
+                    size="small"
+                    variant="outlined"
+                    sx={{ cursor: "help" }}
+                  />
+                </Tooltip>
+              ))}
             </Box>
-          </Box>
-
-          <EquationBlock equation={comp.equation} />
-
-          <Typography variant="body2" sx={{ mt: 2, lineHeight: 1.7 }}>
-            {comp.detail}
-          </Typography>
-
-          <Box sx={{ mt: 2, display: "flex", gap: 1, flexWrap: "wrap" }}>
-            {comp.params.map((p) => (
-              <Tooltip key={p} title={PARAM_DESCRIPTIONS[p] ?? ""} arrow>
-                <Chip
-                  icon={<InfoIcon sx={{ fontSize: 14 }} />}
-                  label={PARAM_LABELS[p] ?? p}
-                  size="small"
-                  variant="outlined"
-                  sx={{ cursor: "help" }}
-                />
-              </Tooltip>
-            ))}
-          </Box>
-        </Paper>
-      ))}
+          </Paper>
+        );
+      })}
 
       {/* ── Parameter Reference ────────────────────────────────── */}
       <SectionTitle>Parameter Reference</SectionTitle>
@@ -243,7 +558,7 @@ export default function AboutModelPage() {
       <SectionTitle>Hold Types</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Breath holds are classified by the lung volume at hold onset. Each type
-        has different initial O\u2082 stores and correspondingly different
+        has different initial O&#x2082; stores and correspondingly different
         parameter bounds for the fit.
       </Typography>
 
@@ -263,7 +578,7 @@ export default function AboutModelPage() {
               </Typography>
               <Divider sx={{ mb: 1 }} />
               <Typography variant="caption" color="text.secondary">
-                O\u2082 start range:{" "}
+                O&#x2082; start range:{" "}
                 <Typography component="span" variant="caption" sx={{ fontWeight: 600, fontFamily: "monospace" }}>
                   {info.o2Range}
                 </Typography>

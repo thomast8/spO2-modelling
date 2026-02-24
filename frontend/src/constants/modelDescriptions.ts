@@ -52,15 +52,25 @@ export const MODEL_SUMMARY = {
     "the sigmoidal oxygen-haemoglobin dissociation curve (Hill equation), " +
     "and a residual correction for sensor and circulatory artefacts.",
   equations: [
-    { label: "O\u2082 depletion", formula: "O\u2082(t) = O\u2082_start \u2212 (VO\u2082 / 60) \u00D7 max(t \u2212 lag, 0)" },
-    { label: "Effective PaO\u2082", formula: "PaO\u2082_eff = O\u2082(t) / scale" },
+    {
+      label: "O\u2082 depletion",
+      formula: "O\u2082(t) = O\u2082_start \u2212 (VO\u2082 / 60) \u00D7 max(t \u2212 lag, 0)",
+      latex: "O_2(t) = O_{2,\\text{start}} - \\frac{\\dot{V}O_2}{60} \\cdot \\max(t - \\text{lag},\\, 0)",
+    },
+    {
+      label: "Effective PaO\u2082",
+      formula: "PaO\u2082_eff = O\u2082(t) / scale",
+      latex: "PaO_{2,\\text{eff}} = \\frac{O_2(t)}{\\text{scale}}",
+    },
     {
       label: "Hill equation",
       formula: "SpO\u2082_base = 100 \u00D7 PaO\u2082_eff\u207F / (PaO\u2082_eff\u207F + P50\u207F)",
+      latex: "SpO_{2,\\text{base}} = 100 \\cdot \\frac{PaO_{2,\\text{eff}}^{\\,n}}{PaO_{2,\\text{eff}}^{\\,n} + P_{50}^{\\,n}}",
     },
     {
       label: "Final prediction",
       formula: "SpO\u2082(t) = SpO\u2082_base + r_offset + r_decay \u00D7 e^(\u2212t / \u03C4_decay)",
+      latex: "SpO_2(t) = SpO_{2,\\text{base}} + r_{\\text{offset}} + r_{\\text{decay}} \\cdot e^{-t / \\tau_{\\text{decay}}}",
     },
   ],
 };
@@ -79,6 +89,7 @@ export const MODEL_COMPONENTS = [
       "This simple linear depletion captures the dominant mechanism driving " +
       "desaturation: the finite O\u2082 reservoir shrinks over time.",
     equation: "O\u2082(t) = O\u2082_start \u2212 (VO\u2082 / 60) \u00D7 max(t \u2212 lag, 0)",
+    latex: "O_2(t) = O_{2,\\text{start}} - \\frac{\\dot{V}O_2}{60} \\cdot \\max(t - \\text{lag},\\, 0)",
     params: ["o2_start", "vo2"],
   },
   {
@@ -96,6 +107,7 @@ export const MODEL_COMPONENTS = [
       "remaining O\u2082 volume into an effective partial pressure that the Hill " +
       "equation can use.",
     equation: "SpO\u2082_base = 100 \u00D7 PaO\u2082_eff\u207F / (PaO\u2082_eff\u207F + P50\u207F)",
+    latex: "SpO_{2,\\text{base}} = 100 \\cdot \\frac{PaO_{2,\\text{eff}}^{\\,n}}{PaO_{2,\\text{eff}}^{\\,n} + P_{50}^{\\,n}}",
     params: ["scale", "p50", "n"],
   },
   {
@@ -113,6 +125,7 @@ export const MODEL_COMPONENTS = [
       "arterial values before equilibrating. Together, these two terms allow the " +
       "model to match the real sensor signal rather than ideal arterial SpO\u2082.",
     equation: "residual(t) = r_offset + r_decay \u00D7 e^(\u2212t / \u03C4_decay)",
+    latex: "\\text{residual}(t) = r_{\\text{offset}} + r_{\\text{decay}} \\cdot e^{-t \\,/\\, \\tau_{\\text{decay}}}",
     params: ["r_offset", "r_decay", "tau_decay"],
   },
   {
@@ -128,6 +141,7 @@ export const MODEL_COMPONENTS = [
       "sensor response. The lag is typically 10-30 seconds and depends on cardiac " +
       "output and peripheral vascular resistance.",
     equation: "t_eff = max(t \u2212 lag, 0)",
+    latex: "t_{\\text{eff}} = \\max(t - \\text{lag},\\, 0)",
     params: ["lag"],
   },
 ];

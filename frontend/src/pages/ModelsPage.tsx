@@ -26,7 +26,9 @@ import {
   Typography,
 } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import "katex/dist/katex.min.css";
 import { useState } from "react";
+import { InlineMath } from "react-katex";
 import { Link as RouterLink } from "react-router-dom";
 import { activateModel, getPredictionCurve, listAllModels } from "../api/models";
 import type { HoldType, ModelVersionResponse } from "../api/types";
@@ -125,20 +127,20 @@ function ModelSummaryCard() {
             p: 2,
             bgcolor: "rgba(37, 99, 235, 0.04)",
             borderRadius: 2,
-            fontFamily: "monospace",
-            fontSize: "0.85rem",
-            lineHeight: 2,
+            display: "flex",
+            flexDirection: "column",
+            gap: 1.5,
           }}
         >
           {MODEL_SUMMARY.equations.map((eq) => (
-            <Box key={eq.label}>
+            <Box key={eq.label} sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
               <Typography
                 component="span"
-                sx={{ fontWeight: 600, color: "text.secondary", fontSize: "0.8rem", mr: 1 }}
+                sx={{ fontWeight: 600, color: "text.secondary", fontSize: "0.8rem", minWidth: 110 }}
               >
                 {eq.label}:
               </Typography>
-              {eq.formula}
+              <InlineMath math={eq.latex} />
             </Box>
           ))}
         </Box>
