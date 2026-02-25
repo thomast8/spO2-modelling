@@ -115,16 +115,21 @@ class FitPrediction(BaseModel):
 
 
 class ApneaModelParamsResponse(BaseModel):
-    """Fitted apnea model parameters (exponential washout + Bohr effect)."""
+    """Apnea model parameters (exponential washout + saturating Bohr effect).
+
+    p50_base and n are fixed haemoglobin constants, included for display only.
+    """
 
     pao2_0: float
     pvo2: float
     tau_washout: float
-    p50_base: float
-    n: float
-    bohr_coeff: float
+    bohr_max: float
+    tau_bohr: float
     lag: float
     r_offset: float
+    # Fixed constants (not fitted), included for API transparency
+    p50_base: float = 26.6
+    n: float = 2.7
 
 
 class FitPreviewResponse(BaseModel):

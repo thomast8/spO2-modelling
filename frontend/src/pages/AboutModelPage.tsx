@@ -39,33 +39,36 @@ const PARAM_LABELS: Record<string, string> = {
   pao2_0: "PAO\u2082 Initial",
   pvo2: "PvO\u2082",
   tau_washout: "\u03C4 Washout",
-  p50_base: "P50 Base",
-  n: "Hill Coefficient (n)",
-  bohr_coeff: "Bohr Coeff",
+  bohr_max: "Bohr Max \u0394P50",
+  tau_bohr: "\u03C4 Bohr",
   lag: "Lag",
   r_offset: "Offset",
+  p50_base: "P50 Base (fixed)",
+  n: "Hill Coefficient (fixed)",
 };
 
 const PARAM_UNITS: Record<string, string> = {
   pao2_0: "mmHg",
   pvo2: "mmHg",
   tau_washout: "seconds",
-  p50_base: "mmHg",
-  n: "dimensionless",
-  bohr_coeff: "mmHg/s",
+  bohr_max: "mmHg",
+  tau_bohr: "seconds",
   lag: "seconds",
   r_offset: "% SpO\u2082",
+  p50_base: "mmHg",
+  n: "dimensionless",
 };
 
 const PARAM_RANGES: Record<string, string> = {
-  pao2_0: "70 \u2013 160",
+  pao2_0: "70 \u2013 200",
   pvo2: "25 \u2013 50",
   tau_washout: "10 \u2013 250",
-  p50_base: "25 \u2013 28",
-  n: "2.5 \u2013 3.0",
-  bohr_coeff: "0.0 \u2013 0.10",
+  bohr_max: "2.0 \u2013 8.0",
+  tau_bohr: "60 \u2013 180",
   lag: "5 \u2013 45",
   r_offset: "\u22123.0 \u2013 3.0",
+  p50_base: "26.6 (fixed)",
+  n: "2.7 (fixed)",
 };
 
 const COMPONENT_ICONS: Record<string, ReactElement> = {
@@ -78,13 +81,15 @@ const COMPONENT_ICONS: Record<string, ReactElement> = {
 const HOLD_TYPE_ORDER = ["FRC", "RV", "FL"] as const;
 
 // Default parameters for demonstration charts (typical FL hold)
+const P50_BASE = 26.6;
+const N_HILL = 2.7;
+
 const DEMO_PARAMS = {
   pao2_0: 120,
   pvo2: 40,
   tau_washout: 80,
-  p50_base: 26.6,
-  n: 2.7,
-  bohr_coeff: 0.02,
+  bohr_max: 5.0,
+  tau_bohr: 120,
   lag: 19,
   r_offset: 0,
 };
@@ -161,7 +166,7 @@ function HillCurveChart() {
     ];
     const result: Data[] = hillCoeffs.map(({ n, name, color, dash }) => ({
       x: pao2,
-      y: pao2.map((p) => 100 * Math.pow(p, n) / (Math.pow(p, n) + Math.pow(DEMO_PARAMS.p50_base, n))),
+      y: pao2.map((p) => 100 * Math.pow(p, n) / (Math.pow(p, n) + Math.pow(P50_BASE, n))),
       type: "scatter" as const,
       mode: "lines" as const,
       name,
@@ -169,16 +174,16 @@ function HillCurveChart() {
     }));
     // P50 marker line
     result.push({
-      x: [DEMO_PARAMS.p50_base, DEMO_PARAMS.p50_base],
+      x: [P50_BASE, P50_BASE],
       y: [0, 50],
       type: "scatter",
       mode: "lines",
-      name: `P50 = ${DEMO_PARAMS.p50_base}`,
+      name: `P50 = ${P50_BASE}`,
       line: { color: "rgba(0,0,0,0.3)", width: 1, dash: "dot" },
       showlegend: true,
     });
     result.push({
-      x: [0, DEMO_PARAMS.p50_base],
+      x: [0, P50_BASE],
       y: [50, 50],
       type: "scatter",
       mode: "lines",
@@ -204,21 +209,21 @@ function HillCurveChart() {
   );
 }
 
-// ── Chart 3: Bohr effect — P50 shift over time ──────────────
+// ── Chart 3: Saturating Bohr effect — P50 shift over time ───
 function BohrEffectChart() {
   const t = useMemo(() => linspace(0, 400, 300), []);
 
   const traces: Data[] = useMemo(() => {
-    const bohrCoeffs = [
-      { beta: 0.0, name: "\u03B2 = 0 (no Bohr)", color: "rgba(0,0,0,0.3)", dash: "dot" as const },
-      { beta: 0.02, name: "\u03B2 = 0.02 (typical)", color: chartColors.spo2Fit, dash: "solid" as const },
-      { beta: 0.05, name: "\u03B2 = 0.05 (strong)", color: chartColors.threshold, dash: "dash" as const },
+    const bohrCurves = [
+      { bmax: 0.0, tau: 120, name: "No Bohr effect", color: "rgba(0,0,0,0.3)", dash: "dot" as const },
+      { bmax: 4.0, tau: 120, name: "\u0394max=4, \u03C4=120s (mild)", color: chartColors.spo2Fit, dash: "solid" as const },
+      { bmax: 6.0, tau: 90, name: "\u0394max=6, \u03C4=90s (strong)", color: chartColors.threshold, dash: "dash" as const },
     ];
-    return bohrCoeffs.map(({ beta, name, color, dash }) => ({
+    return bohrCurves.map(({ bmax, tau, name, color, dash }) => ({
       x: t,
       y: t.map((ti) => {
         const tEff = Math.max(ti - DEMO_PARAMS.lag, 0);
-        return DEMO_PARAMS.p50_base + beta * tEff;
+        return P50_BASE + bmax * (1 - Math.exp(-tEff / Math.max(tau, 0.01)));
       }),
       type: "scatter" as const,
       mode: "lines" as const,
@@ -232,7 +237,7 @@ function BohrEffectChart() {
       data={traces}
       layout={{
         ...chartLayout,
-        title: { text: "Bohr Effect: P50 Shift Over Time", font: { size: 13 } },
+        title: { text: "Saturating Bohr Effect: P50 Shift Over Time", font: { size: 13 } },
         xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
         yaxis: { ...chartLayout.yaxis, title: { text: "P50 effective (mmHg)" } },
       }}
@@ -250,9 +255,9 @@ function LagChart() {
   const computeSpo2 = useMemo(() => (ti: number, lag: number) => {
     const tEff = Math.max(ti - lag, 0);
     const pao2 = DEMO_PARAMS.pvo2 + (DEMO_PARAMS.pao2_0 - DEMO_PARAMS.pvo2) * Math.exp(-tEff / DEMO_PARAMS.tau_washout);
-    const p50Eff = DEMO_PARAMS.p50_base + DEMO_PARAMS.bohr_coeff * tEff;
-    const base = 100 * Math.pow(pao2, DEMO_PARAMS.n) /
-      (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(p50Eff, DEMO_PARAMS.n));
+    const p50Eff = P50_BASE + DEMO_PARAMS.bohr_max * (1 - Math.exp(-tEff / Math.max(DEMO_PARAMS.tau_bohr, 0.01)));
+    const base = 100 * Math.pow(pao2, N_HILL) /
+      (Math.pow(pao2, N_HILL) + Math.pow(p50Eff, N_HILL));
     return Math.min(Math.max(base + DEMO_PARAMS.r_offset, 0), 100);
   }, []);
 
@@ -312,8 +317,8 @@ function FullModelChart() {
     const spo2 = t.map((ti, i) => {
       const tEff = Math.max(ti - p.lag, 0);
       const pao2 = pao2Arr[i];
-      const p50Eff = p.p50_base + p.bohr_coeff * tEff;
-      const base = 100 * Math.pow(pao2, p.n) / (Math.pow(pao2, p.n) + Math.pow(p50Eff, p.n));
+      const p50Eff = P50_BASE + p.bohr_max * (1 - Math.exp(-tEff / Math.max(p.tau_bohr, 0.01)));
+      const base = 100 * Math.pow(pao2, N_HILL) / (Math.pow(pao2, N_HILL) + Math.pow(p50Eff, N_HILL));
       return Math.min(Math.max(base + p.r_offset, 0), 100);
     });
 
@@ -500,8 +505,8 @@ export default function AboutModelPage() {
       {/* ── Parameter Reference ────────────────────────────────── */}
       <SectionTitle>Parameter Reference</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        All eight fitted parameters with their units, typical ranges (across all
-        hold types), and physical interpretation.
+        Seven fitted parameters and two fixed haemoglobin constants, with their
+        units, typical ranges (across all hold types), and physical interpretation.
       </Typography>
 
       <TableContainer component={Paper}>

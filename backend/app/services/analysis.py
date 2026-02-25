@@ -130,7 +130,7 @@ def sensitivity_analysis(
 
     for pct in pct_range:
         test_value = base_value * (1 + pct / 100)
-        test_params = ApneaModelParams(**{**params.to_dict(), param_name: test_value})
+        test_params = ApneaModelParams.from_dict({**params.to_dict(), param_name: test_value})
 
         spo2 = predict_spo2(t, test_params)
 

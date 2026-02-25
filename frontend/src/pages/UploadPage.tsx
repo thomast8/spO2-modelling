@@ -47,11 +47,12 @@ const PARAM_LABELS: Record<string, string> = {
   pao2_0: "PAO\u2082 Initial (mmHg)",
   pvo2: "PvO\u2082 (mmHg)",
   tau_washout: "\u03C4 Washout (s)",
-  p50_base: "P50 Base (mmHg)",
-  n: "Hill Coefficient",
-  bohr_coeff: "Bohr Coeff (mmHg/s)",
+  bohr_max: "Bohr Max \u0394P50 (mmHg)",
+  tau_bohr: "\u03C4 Bohr (s)",
   lag: "Lag (s)",
   r_offset: "Offset (%)",
+  p50_base: "P50 Base (fixed)",
+  n: "Hill Coeff (fixed)",
 };
 
 // ── Hold card with optional fit overlay ──────────────────────

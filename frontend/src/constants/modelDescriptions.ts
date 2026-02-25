@@ -6,7 +6,7 @@
 export const PARAM_DESCRIPTIONS: Record<string, string> = {
   pao2_0:
     "Initial alveolar partial pressure of oxygen (mmHg). Depends on lung volume " +
-    "and pre-oxygenation: ~100-130 mmHg for full lungs (FL), ~80-110 at FRC, " +
+    "and pre-oxygenation: ~100-200 mmHg for full lungs (FL), ~80-120 at FRC, " +
     "~70-110 at residual volume (RV). Higher values extend the SpO\u2082 plateau.",
   pvo2:
     "Mixed venous PO\u2082 (mmHg). The asymptotic floor that alveolar PO\u2082 decays " +
@@ -16,19 +16,22 @@ export const PARAM_DESCRIPTIONS: Record<string, string> = {
     "Exponential O\u2082 washout time constant (seconds). Controls how fast alveolar " +
     "O\u2082 equilibrates with venous blood. Larger values mean slower O\u2082 depletion " +
     "and a longer SpO\u2082 plateau. Depends on lung volume and metabolic rate.",
+  bohr_max:
+    "Maximum Bohr effect P50 shift (mmHg). The asymptotic upper bound of the " +
+    "CO\u2082-driven P50 increase during apnea. Real physiological Bohr shift during " +
+    "a 3-minute apnea is ~3-6 mmHg. Accelerates late-phase desaturation.",
+  tau_bohr:
+    "CO\u2082 accumulation time constant (seconds). Controls how fast the Bohr " +
+    "P50 shift saturates. Smaller values mean CO\u2082 effects kick in earlier. " +
+    "Typical values are 80-150 seconds.",
   p50_base:
-    "Baseline P50 of the oxygen-haemoglobin dissociation curve (mmHg). The PaO\u2082 " +
-    "at which SpO\u2082 equals 50%. Normal physiological value is ~26.6 mmHg. " +
-    "Higher P50 shifts the curve rightward, meaning saturation drops earlier.",
+    "Fixed constant: baseline P50 of the oxygen-haemoglobin dissociation curve " +
+    "(26.6 mmHg). The PaO\u2082 at which SpO\u2082 equals 50%. Not fitted \u2014 this is a " +
+    "haemoglobin biochemistry constant.",
   n:
-    "Hill coefficient representing haemoglobin cooperativity. Controls the " +
-    "steepness of the sigmoidal dissociation curve. Normal physiological value " +
-    "is ~2.7. Higher values produce a steeper transition between the plateau " +
-    "and the steep desaturation region.",
-  bohr_coeff:
-    "Bohr effect coefficient (mmHg/s). Rate at which P50 increases during apnea " +
-    "due to CO\u2082 accumulation and pH drop. Accelerates late-phase desaturation. " +
-    "Typical fitted values are 0.01-0.03 mmHg/s.",
+    "Fixed constant: Hill coefficient representing haemoglobin cooperativity " +
+    "(2.7). Controls the steepness of the sigmoidal dissociation curve. " +
+    "Not fitted \u2014 this is a haemoglobin biochemistry constant.",
   lag:
     "Circulatory delay between arterial O\u2082 changes and finger pulse oximeter " +
     "readings (seconds). Accounts for the transit time from lungs to the " +
@@ -57,9 +60,9 @@ export const MODEL_SUMMARY = {
       latex: "PAO_2(t) = PvO_2 + (PAO_{2,0} - PvO_2) \\cdot e^{-t_{\\text{eff}} / \\tau}",
     },
     {
-      label: "Bohr effect",
-      formula: "P50_eff(t) = P50_base + bohr_coeff \u00D7 t_eff",
-      latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{base}} + \\beta \\cdot t_{\\text{eff}}",
+      label: "Saturating Bohr effect",
+      formula: "P50_eff(t) = P50_BASE + bohr_max \u00D7 (1 \u2212 e^(\u2212t_eff / \u03C4_bohr))",
+      latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\Delta_{\\max} \\cdot \\left(1 - e^{-t_{\\text{eff}} / \\tau_{\\text{bohr}}}\\right)",
     },
     {
       label: "Hill equation",
@@ -105,7 +108,7 @@ export const MODEL_COMPONENTS = [
     params: ["p50_base", "n"],
   },
   {
-    title: "Bohr Effect",
+    title: "Saturating Bohr Effect",
     icon: "correction",
     summary:
       "CO\u2082 accumulation during apnea lowers blood pH, progressively " +
@@ -114,12 +117,13 @@ export const MODEL_COMPONENTS = [
       "During breath-holding, CO\u2082 is continuously produced by metabolism but " +
       "cannot be exhaled. Rising PCO\u2082 decreases blood pH via the Henderson-Hasselbalch " +
       "equation. This pH drop increases P50 (the Bohr effect), meaning haemoglobin " +
-      "releases oxygen more readily. The model captures this as a linear P50 increase " +
-      "over time, which is a good approximation for typical apnea durations. " +
-      "The Bohr effect primarily accelerates the steep desaturation phase.",
-    equation: "P50_eff(t) = P50_base + bohr_coeff \u00D7 t_eff",
-    latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{base}} + \\beta \\cdot t_{\\text{eff}}",
-    params: ["bohr_coeff"],
+      "releases oxygen more readily. The model uses a saturating exponential: " +
+      "P50 rises toward a maximum shift (bohr_max, typically 3-6 mmHg) with time " +
+      "constant tau_bohr. This prevents the unphysical unbounded P50 growth that " +
+      "a linear model would produce at long apnea durations.",
+    equation: "P50_eff(t) = P50_BASE + bohr_max \u00D7 (1 \u2212 e^(\u2212t_eff / \u03C4_bohr))",
+    latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\Delta_{\\max} \\cdot \\left(1 - e^{-t_{\\text{eff}} / \\tau_{\\text{bohr}}}\\right)",
+    params: ["bohr_max", "tau_bohr"],
   },
   {
     title: "Finger-to-Arterial Lag & Offset",
@@ -161,7 +165,7 @@ export const HOLD_TYPE_DESCRIPTIONS: Record<string, { name: string; description:
       "Hold initiated after a maximal inhalation (total lung capacity). " +
       "Provides the largest O\u2082 reserve and slowest washout, " +
       "often used for longer breath-hold tests.",
-    o2Range: "PAO\u2082 100 \u2013 145 mmHg",
+    o2Range: "PAO\u2082 100 \u2013 200 mmHg",
   },
 };
 

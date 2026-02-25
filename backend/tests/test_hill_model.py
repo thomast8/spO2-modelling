@@ -17,9 +17,8 @@ def _default_params() -> ApneaModelParams:
         pao2_0=120.0,       # mmHg, full-lung pre-oxygenation
         pvo2=40.0,          # mmHg, typical mixed venous
         tau_washout=80.0,    # seconds
-        p50_base=26.6,       # mmHg, textbook
-        n=2.7,               # textbook
-        bohr_coeff=0.02,     # mmHg/s
+        bohr_max=5.0,        # mmHg, moderate Bohr shift
+        tau_bohr=120.0,      # seconds, CO2 time constant
         lag=19.0,            # seconds
         r_offset=0.0,        # no calibration bias
     )
@@ -91,7 +90,7 @@ class TestPredictSpo2:
     def test_r_offset_shifts_curve(self):
         """Positive r_offset should shift entire curve up."""
         params_base = _default_params()
-        params_shifted = ApneaModelParams(**{**params_base.to_dict(), "r_offset": 2.0})
+        params_shifted = ApneaModelParams.from_dict({**params_base.to_dict(), "r_offset": 2.0})
 
         t = np.array([60.0, 120.0, 180.0])
         base = predict_spo2(t, params_base)
@@ -100,9 +99,10 @@ class TestPredictSpo2:
         assert np.all(shifted >= base - 0.01)
 
     def test_bohr_effect_accelerates_late_desaturation(self):
-        """Positive bohr_coeff should cause lower SpO2 at late times."""
-        params_no_bohr = ApneaModelParams(**{**_default_params().to_dict(), "bohr_coeff": 0.0})
-        params_bohr = ApneaModelParams(**{**_default_params().to_dict(), "bohr_coeff": 0.05})
+        """Positive bohr_max should cause lower SpO2 at late times."""
+        base = _default_params().to_dict()
+        params_no_bohr = ApneaModelParams.from_dict({**base, "bohr_max": 0.0})
+        params_bohr = ApneaModelParams.from_dict({**base, "bohr_max": 8.0})
 
         t = np.array([200.0, 300.0])
         spo2_no_bohr = predict_spo2(t, params_no_bohr)
@@ -113,7 +113,7 @@ class TestPredictSpo2:
 
     def test_clipped_to_0_100(self):
         """Output should always be between 0 and 100."""
-        params = ApneaModelParams(**{**_default_params().to_dict(), "r_offset": 50.0})
+        params = ApneaModelParams.from_dict({**_default_params().to_dict(), "r_offset": 50.0})
         t = np.linspace(0, 600, 100)
         result = predict_spo2(t, params)
         assert np.all(result >= 0.0)

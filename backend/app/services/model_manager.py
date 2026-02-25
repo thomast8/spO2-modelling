@@ -7,16 +7,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db_models import FitBounds, ModelVersion
-from app.services.fitter import DEFAULT_BOUNDS, PARAM_NAMES
+from app.services.fitter import DEFAULT_BOUNDS
 from app.services.hill_model import ApneaModelParams
 
 
 async def seed_default_bounds(db: AsyncSession) -> None:
-    """Seed default fit bounds if they don't exist yet."""
-    count = await db.scalar(select(func.count()).select_from(FitBounds))
-    if count and count > 0:
-        logger.debug("Fit bounds already seeded, skipping")
-        return
+    """Seed default fit bounds, replacing any stale entries from old schema."""
+    # Delete all existing bounds to handle param name changes across schema versions
+    result = await db.execute(select(FitBounds))
+    for row in result.scalars().all():
+        await db.delete(row)
 
     for hold_type, bounds in DEFAULT_BOUNDS.items():
         for param_name, (lower, upper) in bounds.items():
@@ -100,9 +100,8 @@ async def save_model_version(
         pao2_0=params.pao2_0,
         pvo2=params.pvo2,
         tau_washout=params.tau_washout,
-        p50_base=params.p50_base,
-        n=params.n,
-        bohr_coeff=params.bohr_coeff,
+        bohr_max=params.bohr_max,
+        tau_bohr=params.tau_bohr,
         lag=params.lag,
         r_offset=params.r_offset,
         r_squared=r_squared,
