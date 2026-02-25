@@ -58,13 +58,13 @@ const PARAM_UNITS: Record<string, string> = {
 };
 
 const PARAM_RANGES: Record<string, string> = {
-  pao2_0: "70 \u2013 145",
-  pvo2: "30 \u2013 50",
+  pao2_0: "70 \u2013 160",
+  pvo2: "25 \u2013 50",
   tau_washout: "10 \u2013 250",
-  p50_base: "22 \u2013 32",
-  n: "2.0 \u2013 4.0",
+  p50_base: "25 \u2013 28",
+  n: "2.5 \u2013 3.0",
   bohr_coeff: "0.0 \u2013 0.10",
-  lag: "5 \u2013 30",
+  lag: "5 \u2013 45",
   r_offset: "\u22123.0 \u2013 3.0",
 };
 

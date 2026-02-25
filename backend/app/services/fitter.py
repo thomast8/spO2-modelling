@@ -20,32 +20,32 @@ from app.services.hill_model import ApneaModelParams, compute_r_squared, predict
 DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "FRC": {
         "pao2_0": (80, 120),        # Smaller lung volume -> lower initial PAO2
-        "pvo2": (30, 50),
+        "pvo2": (25, 50),           # Can drop below 30 in prolonged apnea
         "tau_washout": (20, 100),    # Faster washout with less O2 reserve
-        "p50_base": (22, 32),
-        "n": (2.0, 4.0),
+        "p50_base": (25, 28),       # Hb property ~26.6; tight to avoid degeneracy
+        "n": (2.5, 3.0),           # Hb property ~2.7; tight to avoid degeneracy
         "bohr_coeff": (0.0, 0.10),
-        "lag": (5, 30),
+        "lag": (5, 45),            # Cold periphery / vasoconstriction
         "r_offset": (-3.0, 3.0),
     },
     "RV": {
         "pao2_0": (70, 110),        # Minimal lung volume
-        "pvo2": (30, 50),
+        "pvo2": (25, 50),           # Can drop below 30 in prolonged apnea
         "tau_washout": (10, 80),     # Fastest washout
-        "p50_base": (22, 32),
-        "n": (2.0, 4.0),
+        "p50_base": (25, 28),       # Hb property ~26.6; tight to avoid degeneracy
+        "n": (2.5, 3.0),           # Hb property ~2.7; tight to avoid degeneracy
         "bohr_coeff": (0.0, 0.10),
-        "lag": (5, 30),
+        "lag": (5, 45),            # Cold periphery / vasoconstriction
         "r_offset": (-3.0, 3.0),
     },
     "FL": {
-        "pao2_0": (100, 145),       # Full lungs, potentially pre-oxygenated
-        "pvo2": (30, 50),
+        "pao2_0": (100, 160),       # Full lungs; hyperventilation / pre-oxygenation → 150+
+        "pvo2": (25, 50),           # Asymptotic PvO2; drops below 30 in prolonged apnea
         "tau_washout": (50, 250),    # Slowest washout, largest O2 reserve
-        "p50_base": (22, 32),
-        "n": (2.0, 4.0),
+        "p50_base": (25, 28),       # Hb property ~26.6; tight to avoid degeneracy
+        "n": (2.5, 3.0),           # Hb property ~2.7; tight to avoid degeneracy
         "bohr_coeff": (0.0, 0.10),
-        "lag": (5, 30),
+        "lag": (5, 45),            # Cold periphery / vasoconstriction → up to ~40s
         "r_offset": (-3.0, 3.0),
     },
 }
