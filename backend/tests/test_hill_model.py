@@ -17,6 +17,7 @@ def _default_params() -> ApneaModelParams:
         pao2_0=120.0,       # mmHg, full-lung pre-oxygenation
         pvo2=40.0,          # mmHg, typical mixed venous
         tau_washout=80.0,    # seconds
+        n=2.7,               # Hill coefficient
         bohr_max=5.0,        # mmHg, moderate Bohr shift
         tau_bohr=120.0,      # seconds, CO2 time constant
         lag=19.0,            # seconds
@@ -169,7 +170,7 @@ class TestApneaModelParamsConversion:
         params = _default_params()
         arr = params.to_array()
         reconstructed = ApneaModelParams.from_array(arr)
-        for field_name in ApneaModelParams.__dataclass_fields__:
+        for field_name in [f.name for f in __import__("dataclasses").fields(ApneaModelParams)]:
             assert abs(getattr(params, field_name) - getattr(reconstructed, field_name)) < 1e-10
 
     def test_from_dict_ignores_extra_keys(self):

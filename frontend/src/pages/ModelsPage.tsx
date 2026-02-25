@@ -46,7 +46,7 @@ const PARAM_LABELS: Record<string, string> = {
   lag: "Lag (s)",
   r_offset: "Offset (%)",
   p50_base: "P50 Base (fixed)",
-  n: "Hill Coeff (fixed)",
+  n: "Hill Coefficient",
 };
 
 function ModelDetail({ model }: { model: ModelVersionResponse }) {

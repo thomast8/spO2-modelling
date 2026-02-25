@@ -7,7 +7,7 @@ optimizer. Supports fitting across multiple holds simultaneously with
 per-hold-type parameter bounds.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 import numpy as np
 from loguru import logger
@@ -22,7 +22,8 @@ DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
         "pao2_0": (80, 120),        # Smaller lung volume -> lower initial PAO2
         "pvo2": (25, 50),           # Can drop below 30 in prolonged apnea
         "tau_washout": (20, 100),    # Faster washout with less O2 reserve
-        "bohr_max": (2.0, 8.0),    # Max Bohr P50 shift (mmHg); real ~3-6
+        "n": (2.6, 3.2),           # Hill coefficient; varies with temperature/2,3-DPG
+        "bohr_max": (2.0, 10.0),   # Max Bohr P50 shift (mmHg); up to ~10 at respiratory acidosis
         "tau_bohr": (60, 180),      # CO2 time constant (s); ~80-150 physiological
         "lag": (5, 45),            # Cold periphery / vasoconstriction
         "r_offset": (-3.0, 3.0),
@@ -31,7 +32,8 @@ DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
         "pao2_0": (70, 110),        # Minimal lung volume
         "pvo2": (25, 50),           # Can drop below 30 in prolonged apnea
         "tau_washout": (10, 80),     # Fastest washout
-        "bohr_max": (2.0, 8.0),    # Max Bohr P50 shift (mmHg); real ~3-6
+        "n": (2.6, 3.2),           # Hill coefficient; varies with temperature/2,3-DPG
+        "bohr_max": (2.0, 10.0),   # Max Bohr P50 shift (mmHg); up to ~10 at respiratory acidosis
         "tau_bohr": (60, 180),      # CO2 time constant (s); ~80-150 physiological
         "lag": (5, 45),            # Cold periphery / vasoconstriction
         "r_offset": (-3.0, 3.0),
@@ -40,15 +42,16 @@ DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
         "pao2_0": (100, 200),       # Full lungs; hyperventilation → PAO2 140-150+
         "pvo2": (25, 50),           # Asymptotic PvO2; drops below 30 in prolonged apnea
         "tau_washout": (50, 250),    # Slowest washout, largest O2 reserve
-        "bohr_max": (2.0, 8.0),    # Max Bohr P50 shift (mmHg); real ~3-6
+        "n": (2.6, 3.2),           # Hill coefficient; varies with temperature/2,3-DPG
+        "bohr_max": (2.0, 10.0),   # Max Bohr P50 shift (mmHg); up to ~10 at respiratory acidosis
         "tau_bohr": (60, 180),      # CO2 time constant (s); ~80-150 physiological
         "lag": (5, 45),            # Cold periphery / vasoconstriction → up to ~40s
         "r_offset": (-3.0, 3.0),
     },
 }
 
-# Parameter names in order (matches ApneaModelParams dataclass field order)
-PARAM_NAMES = list(ApneaModelParams.__dataclass_fields__.keys())
+# Parameter names in order (matches ApneaModelParams dataclass field order, excluding ClassVar)
+PARAM_NAMES = [f.name for f in fields(ApneaModelParams)]
 
 
 @dataclass

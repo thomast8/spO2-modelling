@@ -13,9 +13,10 @@ Model structure:
     P50_eff(t) = P50_BASE + bohr_max * (1 - exp(-t_eff / tau_bohr))
     SpO2(t)    = clip(r_offset + 100 * PAO2^n / (PAO2^n + P50_eff^n), 0, 100)
 
-P50_BASE (26.6 mmHg) and N_HILL (2.7) are fixed haemoglobin biochemistry
-constants, not fitted parameters. The saturating Bohr effect replaces the
-linear model to prevent unphysical P50 growth at long apnea durations.
+P50_BASE (26.6 mmHg) is a fixed haemoglobin biochemistry constant.
+n (Hill coefficient) is fitted within a tight physiological range (2.6-3.0).
+The saturating Bohr effect replaces the linear model to prevent unphysical
+P50 growth at long apnea durations.
 """
 
 from dataclasses import asdict, dataclass, fields
@@ -29,25 +30,24 @@ from loguru import logger
 class ApneaModelParams:
     """Fitted parameters for the apnea desaturation model.
 
-    P50_BASE and N_HILL are fixed haemoglobin constants (not fitted).
+    P50_BASE is a fixed haemoglobin constant (not fitted).
     """
 
     P50_BASE: ClassVar[float] = 26.6   # Baseline P50 of the ODC (mmHg)
-    N_HILL: ClassVar[float] = 2.7      # Hill coefficient (Hb cooperativity)
 
     pao2_0: float       # Initial alveolar PO2 (mmHg)
     pvo2: float         # Mixed venous PO2, asymptotic floor (mmHg)
     tau_washout: float   # Exponential O2 washout time constant (seconds)
+    n: float             # Hill coefficient (Hb cooperativity, ~2.6-3.0)
     bohr_max: float      # Maximum Bohr P50 shift (mmHg)
     tau_bohr: float      # CO2 accumulation time constant (seconds)
     lag: float           # Finger-to-arterial circulation delay (seconds)
     r_offset: float      # Constant SpO2 offset for sensor calibration (%)
 
     def to_dict(self) -> dict:
-        """Convert to dictionary, including fixed constants for API transparency."""
+        """Convert to dictionary, including fixed constant for API transparency."""
         d = asdict(self)
         d["p50_base"] = self.P50_BASE
-        d["n"] = self.N_HILL
         return d
 
     @classmethod
@@ -107,7 +107,7 @@ def predict_spo2(t: np.ndarray, params: ApneaModelParams) -> np.ndarray:
     )
 
     # Hill equation with dynamic P50
-    spo2 = params.r_offset + hill_spo2(pao2, p50_eff, ApneaModelParams.N_HILL)
+    spo2 = params.r_offset + hill_spo2(pao2, p50_eff, params.n)
     return np.clip(spo2, 0.0, 100.0)
 
 
@@ -128,7 +128,7 @@ def predict_spo2_components(
         1.0 - np.exp(-t_eff / max(params.tau_bohr, 0.01))
     )
 
-    spo2_base = hill_spo2(pao2, p50_eff, ApneaModelParams.N_HILL)
+    spo2_base = hill_spo2(pao2, p50_eff, params.n)
     spo2_total = np.clip(spo2_base + params.r_offset, 0.0, 100.0)
 
     return {

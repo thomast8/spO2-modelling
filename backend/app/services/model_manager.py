@@ -13,10 +13,11 @@ from app.services.hill_model import ApneaModelParams
 
 async def seed_default_bounds(db: AsyncSession) -> None:
     """Seed default fit bounds, replacing any stale entries from old schema."""
-    # Delete all existing bounds to handle param name changes across schema versions
-    result = await db.execute(select(FitBounds))
-    for row in result.scalars().all():
-        await db.delete(row)
+    from sqlalchemy import delete
+
+    # Bulk delete all existing bounds first (handles stale param names)
+    await db.execute(delete(FitBounds))
+    await db.flush()
 
     for hold_type, bounds in DEFAULT_BOUNDS.items():
         for param_name, (lower, upper) in bounds.items():
@@ -100,6 +101,7 @@ async def save_model_version(
         pao2_0=params.pao2_0,
         pvo2=params.pvo2,
         tau_washout=params.tau_washout,
+        n=params.n,
         bohr_max=params.bohr_max,
         tau_bohr=params.tau_bohr,
         lag=params.lag,

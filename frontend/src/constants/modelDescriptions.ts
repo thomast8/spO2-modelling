@@ -29,9 +29,9 @@ export const PARAM_DESCRIPTIONS: Record<string, string> = {
     "(26.6 mmHg). The PaO\u2082 at which SpO\u2082 equals 50%. Not fitted \u2014 this is a " +
     "haemoglobin biochemistry constant.",
   n:
-    "Fixed constant: Hill coefficient representing haemoglobin cooperativity " +
-    "(2.7). Controls the steepness of the sigmoidal dissociation curve. " +
-    "Not fitted \u2014 this is a haemoglobin biochemistry constant.",
+    "Hill coefficient representing haemoglobin cooperativity. Controls the " +
+    "steepness of the sigmoidal dissociation curve. Fitted within a tight " +
+    "physiological range (2.6\u20133.2). Normal value is ~2.7.",
   lag:
     "Circulatory delay between arterial O\u2082 changes and finger pulse oximeter " +
     "readings (seconds). Accounts for the transit time from lungs to the " +

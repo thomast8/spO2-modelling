@@ -44,7 +44,7 @@ const PARAM_LABELS: Record<string, string> = {
   lag: "Lag",
   r_offset: "Offset",
   p50_base: "P50 Base (fixed)",
-  n: "Hill Coefficient (fixed)",
+  n: "Hill Coefficient (n)",
 };
 
 const PARAM_UNITS: Record<string, string> = {
@@ -63,12 +63,12 @@ const PARAM_RANGES: Record<string, string> = {
   pao2_0: "70 \u2013 200",
   pvo2: "25 \u2013 50",
   tau_washout: "10 \u2013 250",
-  bohr_max: "2.0 \u2013 8.0",
+  bohr_max: "2.0 \u2013 10.0",
   tau_bohr: "60 \u2013 180",
   lag: "5 \u2013 45",
   r_offset: "\u22123.0 \u2013 3.0",
   p50_base: "26.6 (fixed)",
-  n: "2.7 (fixed)",
+  n: "2.6 \u2013 3.2",
 };
 
 const COMPONENT_ICONS: Record<string, ReactElement> = {
@@ -82,12 +82,12 @@ const HOLD_TYPE_ORDER = ["FRC", "RV", "FL"] as const;
 
 // Default parameters for demonstration charts (typical FL hold)
 const P50_BASE = 26.6;
-const N_HILL = 2.7;
 
 const DEMO_PARAMS = {
   pao2_0: 120,
   pvo2: 40,
   tau_washout: 80,
+  n: 2.7,
   bohr_max: 5.0,
   tau_bohr: 120,
   lag: 19,
@@ -256,8 +256,8 @@ function LagChart() {
     const tEff = Math.max(ti - lag, 0);
     const pao2 = DEMO_PARAMS.pvo2 + (DEMO_PARAMS.pao2_0 - DEMO_PARAMS.pvo2) * Math.exp(-tEff / DEMO_PARAMS.tau_washout);
     const p50Eff = P50_BASE + DEMO_PARAMS.bohr_max * (1 - Math.exp(-tEff / Math.max(DEMO_PARAMS.tau_bohr, 0.01)));
-    const base = 100 * Math.pow(pao2, N_HILL) /
-      (Math.pow(pao2, N_HILL) + Math.pow(p50Eff, N_HILL));
+    const base = 100 * Math.pow(pao2, DEMO_PARAMS.n) /
+      (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(p50Eff, DEMO_PARAMS.n));
     return Math.min(Math.max(base + DEMO_PARAMS.r_offset, 0), 100);
   }, []);
 
@@ -318,7 +318,7 @@ function FullModelChart() {
       const tEff = Math.max(ti - p.lag, 0);
       const pao2 = pao2Arr[i];
       const p50Eff = P50_BASE + p.bohr_max * (1 - Math.exp(-tEff / Math.max(p.tau_bohr, 0.01)));
-      const base = 100 * Math.pow(pao2, N_HILL) / (Math.pow(pao2, N_HILL) + Math.pow(p50Eff, N_HILL));
+      const base = 100 * Math.pow(pao2, DEMO_PARAMS.n) / (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(p50Eff, DEMO_PARAMS.n));
       return Math.min(Math.max(base + p.r_offset, 0), 100);
     });
 
@@ -505,7 +505,7 @@ export default function AboutModelPage() {
       {/* ── Parameter Reference ────────────────────────────────── */}
       <SectionTitle>Parameter Reference</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Seven fitted parameters and two fixed haemoglobin constants, with their
+        Eight fitted parameters and one fixed haemoglobin constant, with their
         units, typical ranges (across all hold types), and physical interpretation.
       </Typography>
 
