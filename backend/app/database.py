@@ -36,6 +36,21 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create all tables (for development; use Alembic in production)."""
+    """Create all tables and run schema migrations."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_migrate_n_to_gamma)
+
+
+def _migrate_n_to_gamma(conn) -> None:
+    """Rename model_versions.n → gamma (Severinghaus steepness exponent)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(conn)
+    if "model_versions" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("model_versions")}
+    if "n" in columns and "gamma" not in columns:
+        conn.execute(text("ALTER TABLE model_versions RENAME COLUMN n TO gamma"))
+        from loguru import logger
+        logger.info("Migrated model_versions: renamed column 'n' → 'gamma'")

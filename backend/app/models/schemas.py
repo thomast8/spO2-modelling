@@ -123,7 +123,7 @@ class ApneaModelParamsResponse(BaseModel):
     pao2_0: float
     pvo2: float
     tau_washout: float
-    n: float
+    gamma: float
     bohr_max: float
     tau_bohr: float
     lag: float

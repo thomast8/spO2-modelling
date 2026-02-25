@@ -102,7 +102,7 @@ class ModelVersion(Base):
     pao2_0: Mapped[float] = mapped_column(Float, nullable=False)
     pvo2: Mapped[float] = mapped_column(Float, nullable=False)
     tau_washout: Mapped[float] = mapped_column(Float, nullable=False)
-    n: Mapped[float] = mapped_column(Float, nullable=False)
+    gamma: Mapped[float] = mapped_column(Float, nullable=False)
     bohr_max: Mapped[float] = mapped_column(Float, nullable=False)
     tau_bohr: Mapped[float] = mapped_column(Float, nullable=False)
     lag: Mapped[float] = mapped_column(Float, nullable=False)
@@ -128,7 +128,7 @@ class ModelVersion(Base):
             pao2_0=self.pao2_0,
             pvo2=self.pvo2,
             tau_washout=self.tau_washout,
-            n=self.n,
+            gamma=self.gamma,
             bohr_max=self.bohr_max,
             tau_bohr=self.tau_bohr,
             lag=self.lag,

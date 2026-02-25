@@ -49,7 +49,7 @@ export default function DashboardPage() {
         Dashboard
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-        SpO₂ desaturation modelling — Hill equation ODC fits for breath-hold apnea
+        SpO₂ desaturation modelling — Severinghaus ODC fits for breath-hold apnea
       </Typography>
 
       <Grid container spacing={2.5} sx={{ mb: 4 }}>

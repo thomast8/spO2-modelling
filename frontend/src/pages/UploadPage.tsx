@@ -52,7 +52,7 @@ const PARAM_LABELS: Record<string, string> = {
   lag: "Lag (s)",
   r_offset: "Offset (%)",
   p50_base: "P50 Base (fixed)",
-  n: "Hill Coefficient",
+  gamma: "Steepness (\u03B3)",
 };
 
 // ── Hold card with optional fit overlay ──────────────────────

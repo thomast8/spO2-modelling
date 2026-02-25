@@ -19,3 +19,11 @@
 ## Completed
 
 _(newest first)_
+
+- [x] Replace Hill equation ODC with Severinghaus (1979) + gamma steepness exponent (2026-02-25)
+  - Standalone comparison script: Hill vs Kelman vs Severinghaus (+gamma variants)
+  - Severinghaus+gamma wins: R²=0.9956 vs Hill R²=0.9915 (same 8 params, 3/8 at bounds vs 6/8)
+  - Backend: new `severinghaus_spo2()`, virtual PO2 Bohr shift, gamma power transform
+  - Renamed parameter `n` (Hill coefficient) → `gamma` (steepness exponent)
+  - Updated bounds, DB schema, API, frontend labels/charts/descriptions
+  - DB migration: auto-renames `model_versions.n` → `gamma` on startup

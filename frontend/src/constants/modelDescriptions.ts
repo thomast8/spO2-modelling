@@ -28,10 +28,10 @@ export const PARAM_DESCRIPTIONS: Record<string, string> = {
     "Fixed constant: baseline P50 of the oxygen-haemoglobin dissociation curve " +
     "(26.6 mmHg). The PaO\u2082 at which SpO\u2082 equals 50%. Not fitted \u2014 this is a " +
     "haemoglobin biochemistry constant.",
-  n:
-    "Hill coefficient representing haemoglobin cooperativity. Controls the " +
-    "steepness of the sigmoidal dissociation curve. Fitted within a tight " +
-    "physiological range (2.6\u20133.2). Normal value is ~2.7.",
+  gamma:
+    "Steepness exponent for the Severinghaus ODC. Controls how abrupt the " +
+    "sigmoidal transition is. 1.0 = standard population-average curve, " +
+    ">1.0 = steeper. Captures individual variation in Hb cooperativity.",
   lag:
     "Circulatory delay between arterial O\u2082 changes and finger pulse oximeter " +
     "readings (seconds). Accounts for the transit time from lungs to the " +
@@ -47,7 +47,7 @@ export const MODEL_SUMMARY = {
   description:
     "Predicts SpO\u2082 desaturation during breath-hold apnoea by modelling " +
     "exponential alveolar O\u2082 washout (gradient-driven equilibration with venous blood), " +
-    "the Bohr effect (CO\u2082-driven rightward ODC shift), and the Hill equation.",
+    "the Bohr effect (CO\u2082-driven rightward ODC shift), and the Severinghaus equation.",
   equations: [
     {
       label: "Effective time",
@@ -65,9 +65,9 @@ export const MODEL_SUMMARY = {
       latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\Delta_{\\max} \\cdot \\left(1 - e^{-t_{\\text{eff}} / \\tau_{\\text{bohr}}}\\right)",
     },
     {
-      label: "Hill equation",
-      formula: "SpO\u2082(t) = r_offset + 100 \u00D7 PAO\u2082\u207F / (PAO\u2082\u207F + P50_eff\u207F)",
-      latex: "SpO_2(t) = r_{\\text{offset}} + 100 \\cdot \\frac{PAO_2^{\\,n}}{PAO_2^{\\,n} + P_{50,\\text{eff}}^{\\,n}}",
+      label: "Severinghaus equation",
+      formula: "SpO\u2082(t) = r_offset + 100 / (1 + 23400/(PAO\u2082_adj\u00B3 + 150\u00D7PAO\u2082_adj))",
+      latex: "SpO_2(t) = r_{\\text{offset}} + \\frac{100}{1 + \\frac{23400}{\\widetilde{P}^{\\,3} + 150\\,\\widetilde{P}}}",
     },
   ],
 };
@@ -91,21 +91,23 @@ export const MODEL_COMPONENTS = [
     params: ["pao2_0", "pvo2", "tau_washout"],
   },
   {
-    title: "Dissociation Curve (Hill Equation)",
+    title: "Dissociation Curve (Severinghaus Equation)",
     icon: "curve",
     summary:
-      "The sigmoidal oxygen-haemoglobin dissociation curve converts PAO\u2082 " +
-      "into SpO\u2082 percentage using the Hill equation.",
+      "The Severinghaus (1979) equation converts PAO\u2082 into SpO\u2082 percentage " +
+      "using a rational polynomial that captures the asymmetric ODC shape.",
     detail:
-      "The Hill equation models how haemoglobin binds oxygen cooperatively: " +
-      "at high PAO\u2082 levels (>80 mmHg), saturation plateaus near 100% (the flat shoulder), " +
-      "but once PAO\u2082 drops into the 40-60 mmHg range, saturation falls steeply. " +
-      "P50 determines where this transition occurs, while the Hill coefficient (n) " +
-      "controls how abrupt the transition is. Combined with exponential washout, " +
-      "this naturally produces the plateau-then-drop pattern seen in real data.",
-    equation: "SpO\u2082 = 100 \u00D7 PAO\u2082\u207F / (PAO\u2082\u207F + P50_eff\u207F)",
-    latex: "SpO_2 = 100 \\cdot \\frac{PAO_2^{\\,n}}{PAO_2^{\\,n} + P_{50,\\text{eff}}^{\\,n}}",
-    params: ["p50_base", "n"],
+      "The Severinghaus equation models the oxygen-haemoglobin dissociation curve " +
+      "with a rational polynomial: at high PAO\u2082 levels (>80 mmHg), saturation " +
+      "plateaus near 100% (the flat shoulder), but once PAO\u2082 drops into the " +
+      "40-60 mmHg range, saturation falls steeply. Unlike the symmetric Hill equation, " +
+      "Severinghaus naturally captures the real ODC\u2019s asymmetry (steeper in 40-80 mmHg). " +
+      "The gamma steepness exponent adjusts the curve slope to capture individual " +
+      "variation in haemoglobin cooperativity. The Bohr effect is implemented via " +
+      "virtual PO\u2082 scaling, which shifts the curve rightward as CO\u2082 accumulates.",
+    equation: "SpO\u2082 = 100 / (1 + 23400 / (P\u0303\u00B3 + 150 \u00D7 P\u0303))",
+    latex: "SpO_2 = \\frac{100}{1 + \\frac{23400}{\\widetilde{P}^{\\,3} + 150\\,\\widetilde{P}}}",
+    params: ["p50_base", "gamma"],
   },
   {
     title: "Saturating Bohr Effect",

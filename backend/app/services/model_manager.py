@@ -101,7 +101,7 @@ async def save_model_version(
         pao2_0=params.pao2_0,
         pvo2=params.pvo2,
         tau_washout=params.tau_washout,
-        n=params.n,
+        gamma=params.gamma,
         bohr_max=params.bohr_max,
         tau_bohr=params.tau_bohr,
         lag=params.lag,

@@ -103,7 +103,7 @@ async def save_fit(
         pao2_0=request.params.pao2_0,
         pvo2=request.params.pvo2,
         tau_washout=request.params.tau_washout,
-        n=request.params.n,
+        gamma=request.params.gamma,
         bohr_max=request.params.bohr_max,
         tau_bohr=request.params.tau_bohr,
         lag=request.params.lag,

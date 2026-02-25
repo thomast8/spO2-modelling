@@ -1,7 +1,7 @@
 [project]
 name = "spo2-modelling"
 version = "0.1.0"
-description = "SpO2 desaturation modelling webapp — Hill equation ODC fits for breath-hold apnea"
+description = "SpO2 desaturation modelling webapp — Severinghaus ODC fits for breath-hold apnea"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
