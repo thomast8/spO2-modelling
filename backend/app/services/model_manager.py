@@ -7,16 +7,17 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db_models import FitBounds, ModelVersion
-from app.services.fitter import DEFAULT_BOUNDS, PARAM_NAMES
-from app.services.hill_model import HillParams
+from app.services.fitter import DEFAULT_BOUNDS
+from app.services.hill_model import ApneaModelParams
 
 
 async def seed_default_bounds(db: AsyncSession) -> None:
-    """Seed default fit bounds if they don't exist yet."""
-    count = await db.scalar(select(func.count()).select_from(FitBounds))
-    if count and count > 0:
-        logger.debug("Fit bounds already seeded, skipping")
-        return
+    """Seed default fit bounds, replacing any stale entries from old schema."""
+    from sqlalchemy import delete
+
+    # Bulk delete all existing bounds first (handles stale param names)
+    await db.execute(delete(FitBounds))
+    await db.flush()
 
     for hold_type, bounds in DEFAULT_BOUNDS.items():
         for param_name, (lower, upper) in bounds.items():
@@ -56,7 +57,7 @@ async def get_next_version(db: AsyncSession, hold_type: str) -> int:
 async def save_model_version(
     db: AsyncSession,
     hold_type: str,
-    params: HillParams,
+    params: ApneaModelParams,
     r_squared: float,
     objective_val: float,
     converged: bool,
@@ -69,7 +70,7 @@ async def save_model_version(
     Args:
         db: Database session
         hold_type: FRC, RV, or FL
-        params: Fitted Hill parameters
+        params: Fitted model parameters
         r_squared: Overall R-squared
         objective_val: Optimization objective value
         converged: Whether optimizer converged
@@ -97,15 +98,14 @@ async def save_model_version(
         hold_type=hold_type,
         version=version,
         is_active=set_active,
-        o2_start=params.o2_start,
-        vo2=params.vo2,
-        scale_param=params.scale,
-        p50=params.p50,
+        pao2_0=params.pao2_0,
+        pvo2=params.pvo2,
+        tau_washout=params.tau_washout,
         n=params.n,
-        r_offset=params.r_offset,
-        r_decay=params.r_decay,
-        tau_decay=params.tau_decay,
+        bohr_max=params.bohr_max,
+        tau_bohr=params.tau_bohr,
         lag=params.lag,
+        r_offset=params.r_offset,
         r_squared=r_squared,
         objective_val=objective_val,
         converged=converged,

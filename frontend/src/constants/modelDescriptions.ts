@@ -4,145 +4,141 @@
  */
 
 export const PARAM_DESCRIPTIONS: Record<string, string> = {
-  o2_start:
-    "Total oxygen stored in the lungs at the start of the breath hold (mL). " +
-    "Depends on lung volume at hold onset: ~2000-2800 mL for full lungs (FL), " +
-    "~800-1500 mL at FRC, ~400-1000 mL at residual volume (RV). " +
-    "Higher values delay the onset of desaturation.",
-  vo2:
-    "Oxygen consumption rate (mL/min). Reflects the subject's metabolic demand " +
-    "during apnea. Typical resting values are 200-250 mL/min. " +
-    "Higher VO\u2082 causes faster O\u2082 depletion and earlier desaturation.",
-  scale:
-    "Conversion factor from remaining O\u2082 (mL) to an effective PaO\u2082-like " +
-    "unit used by the Hill equation. Acts as a bridge between the O\u2082 store " +
-    "model and the dissociation curve. Not a direct physiological measurement.",
-  p50:
-    "The effective PaO\u2082 value at which SpO\u2082 equals 50% (mmHg-equivalent). " +
-    "Controls the horizontal position of the sigmoidal dissociation curve. " +
-    "Higher P50 shifts the curve rightward, meaning saturation drops at higher O\u2082 levels.",
+  pao2_0:
+    "Initial alveolar partial pressure of oxygen (mmHg). Depends on lung volume " +
+    "and pre-oxygenation: ~100-200 mmHg for full lungs (FL), ~80-120 at FRC, " +
+    "~70-110 at residual volume (RV). Higher values extend the SpO\u2082 plateau.",
+  pvo2:
+    "Mixed venous PO\u2082 (mmHg). The asymptotic floor that alveolar PO\u2082 decays " +
+    "toward during apnea. Represents the PO\u2082 of blood returning to the lungs. " +
+    "Normal resting value is ~40 mmHg.",
+  tau_washout:
+    "Exponential O\u2082 washout time constant (seconds). Controls how fast alveolar " +
+    "O\u2082 equilibrates with venous blood. Larger values mean slower O\u2082 depletion " +
+    "and a longer SpO\u2082 plateau. Depends on lung volume and metabolic rate.",
+  bohr_max:
+    "Maximum Bohr effect P50 shift (mmHg). The asymptotic upper bound of the " +
+    "CO\u2082-driven P50 increase during apnea. Real physiological Bohr shift during " +
+    "a 3-minute apnea is ~3-6 mmHg. Accelerates late-phase desaturation.",
+  tau_bohr:
+    "CO\u2082 accumulation time constant (seconds). Controls how fast the Bohr " +
+    "P50 shift saturates. Smaller values mean CO\u2082 effects kick in earlier. " +
+    "Typical values are 80-150 seconds.",
+  p50_base:
+    "Fixed constant: baseline P50 of the oxygen-haemoglobin dissociation curve " +
+    "(26.6 mmHg). The PaO\u2082 at which SpO\u2082 equals 50%. Not fitted \u2014 this is a " +
+    "haemoglobin biochemistry constant.",
   n:
     "Hill coefficient representing haemoglobin cooperativity. Controls the " +
-    "steepness of the sigmoidal dissociation curve. Normal physiological value " +
-    "is ~2.7. Higher values produce a steeper transition between the plateau " +
-    "and the steep desaturation region.",
-  r_offset:
-    "Constant residual offset added to the base SpO\u2082 prediction (% SpO\u2082). " +
-    "Accounts for systematic bias from sensor placement, calibration drift, " +
-    "or consistent differences between arterial and peripheral saturation.",
-  r_decay:
-    "Amplitude of the transient residual correction (% SpO\u2082). Models the " +
-    "initial ischaemic response at the sensor site that decays over time. " +
-    "Positive values add an initial upward bias that fades as blood flow equilibrates.",
-  tau_decay:
-    "Time constant for the exponential decay of the transient residual (seconds). " +
-    "Controls how quickly the initial sensor transient dissipates. " +
-    "Larger values mean the transient effect persists longer into the hold.",
+    "steepness of the sigmoidal dissociation curve. Fitted within a tight " +
+    "physiological range (2.6\u20133.2). Normal value is ~2.7.",
   lag:
     "Circulatory delay between arterial O\u2082 changes and finger pulse oximeter " +
     "readings (seconds). Accounts for the transit time from lungs to the " +
     "peripheral measurement site. Typically 10-30 seconds.",
+  r_offset:
+    "Constant SpO\u2082 offset for sensor calibration (%). Accounts for systematic " +
+    "bias from sensor placement, calibration drift, or consistent differences " +
+    "between arterial and peripheral saturation.",
 };
 
 export const MODEL_SUMMARY = {
-  title: "Hill Equation Oxygen-Haemoglobin Dissociation Model",
+  title: "Exponential Alveolar Washout + Bohr Effect Model",
   description:
     "Predicts SpO\u2082 desaturation during breath-hold apnoea by modelling " +
-    "three coupled processes: linear O\u2082 depletion from lung stores, " +
-    "the sigmoidal oxygen-haemoglobin dissociation curve (Hill equation), " +
-    "and a residual correction for sensor and circulatory artefacts.",
+    "exponential alveolar O\u2082 washout (gradient-driven equilibration with venous blood), " +
+    "the Bohr effect (CO\u2082-driven rightward ODC shift), and the Hill equation.",
   equations: [
     {
-      label: "O\u2082 depletion",
-      formula: "O\u2082(t) = O\u2082_start \u2212 (VO\u2082 / 60) \u00D7 max(t \u2212 lag, 0)",
-      latex: "O_2(t) = O_{2,\\text{start}} - \\frac{\\dot{V}O_2}{60} \\cdot \\max(t - \\text{lag},\\, 0)",
+      label: "Effective time",
+      formula: "t_eff = max(t \u2212 lag, 0)",
+      latex: "t_{\\text{eff}} = \\max(t - \\text{lag},\\, 0)",
     },
     {
-      label: "Effective PaO\u2082",
-      formula: "PaO\u2082_eff = O\u2082(t) / scale",
-      latex: "PaO_{2,\\text{eff}} = \\frac{O_2(t)}{\\text{scale}}",
+      label: "Alveolar washout",
+      formula: "PAO\u2082(t) = PvO\u2082 + (PAO\u2082\u2080 \u2212 PvO\u2082) \u00D7 e^(\u2212t_eff / \u03C4)",
+      latex: "PAO_2(t) = PvO_2 + (PAO_{2,0} - PvO_2) \\cdot e^{-t_{\\text{eff}} / \\tau}",
+    },
+    {
+      label: "Saturating Bohr effect",
+      formula: "P50_eff(t) = P50_BASE + bohr_max \u00D7 (1 \u2212 e^(\u2212t_eff / \u03C4_bohr))",
+      latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\Delta_{\\max} \\cdot \\left(1 - e^{-t_{\\text{eff}} / \\tau_{\\text{bohr}}}\\right)",
     },
     {
       label: "Hill equation",
-      formula: "SpO\u2082_base = 100 \u00D7 PaO\u2082_eff\u207F / (PaO\u2082_eff\u207F + P50\u207F)",
-      latex: "SpO_{2,\\text{base}} = 100 \\cdot \\frac{PaO_{2,\\text{eff}}^{\\,n}}{PaO_{2,\\text{eff}}^{\\,n} + P_{50}^{\\,n}}",
-    },
-    {
-      label: "Final prediction",
-      formula: "SpO\u2082(t) = SpO\u2082_base + r_offset + r_decay \u00D7 e^(\u2212t / \u03C4_decay)",
-      latex: "SpO_2(t) = SpO_{2,\\text{base}} + r_{\\text{offset}} + r_{\\text{decay}} \\cdot e^{-t / \\tau_{\\text{decay}}}",
+      formula: "SpO\u2082(t) = r_offset + 100 \u00D7 PAO\u2082\u207F / (PAO\u2082\u207F + P50_eff\u207F)",
+      latex: "SpO_2(t) = r_{\\text{offset}} + 100 \\cdot \\frac{PAO_2^{\\,n}}{PAO_2^{\\,n} + P_{50,\\text{eff}}^{\\,n}}",
     },
   ],
 };
 
 export const MODEL_COMPONENTS = [
   {
-    title: "Oxygen Depletion",
+    title: "Exponential Alveolar Washout",
     icon: "lungs",
     summary:
-      "During a breath hold, lung O\u2082 stores deplete at a constant rate " +
-      "determined by the subject's metabolic demand (VO\u2082).",
+      "Alveolar O\u2082 declines exponentially as O\u2082 transfers from alveoli to blood " +
+      "at a rate proportional to the alveolar-venous PO\u2082 gradient.",
     detail:
-      "The model starts with an initial oxygen store (O\u2082_start) that depends on " +
-      "the lung volume at the onset of the hold. Oxygen is consumed at a constant " +
-      "rate (VO\u2082), but consumption only begins after the circulatory lag period. " +
-      "This simple linear depletion captures the dominant mechanism driving " +
-      "desaturation: the finite O\u2082 reservoir shrinks over time.",
-    equation: "O\u2082(t) = O\u2082_start \u2212 (VO\u2082 / 60) \u00D7 max(t \u2212 lag, 0)",
-    latex: "O_2(t) = O_{2,\\text{start}} - \\frac{\\dot{V}O_2}{60} \\cdot \\max(t - \\text{lag},\\, 0)",
-    params: ["o2_start", "vo2"],
+      "Unlike linear depletion, the exponential model captures the physiological " +
+      "reality that O\u2082 transfer slows as the gradient between alveolar and venous " +
+      "PO\u2082 shrinks. PAO\u2082 starts at pao2_0 (depending on lung volume and " +
+      "pre-oxygenation) and decays toward pvo2 (mixed venous PO\u2082, ~40 mmHg). " +
+      "The time constant \u03C4 depends on lung volume: larger lungs (FL) have larger " +
+      "\u03C4, meaning slower washout and a longer SpO\u2082 plateau.",
+    equation: "PAO\u2082(t) = PvO\u2082 + (PAO\u2082\u2080 \u2212 PvO\u2082) \u00D7 e^(\u2212t_eff / \u03C4)",
+    latex: "PAO_2(t) = PvO_2 + (PAO_{2,0} - PvO_2) \\cdot e^{-t_{\\text{eff}} / \\tau}",
+    params: ["pao2_0", "pvo2", "tau_washout"],
   },
   {
     title: "Dissociation Curve (Hill Equation)",
     icon: "curve",
     summary:
-      "The sigmoidal oxygen-haemoglobin dissociation curve converts O\u2082 levels " +
+      "The sigmoidal oxygen-haemoglobin dissociation curve converts PAO\u2082 " +
       "into SpO\u2082 percentage using the Hill equation.",
     detail:
       "The Hill equation models how haemoglobin binds oxygen cooperatively: " +
-      "at high O\u2082 levels, saturation plateaus near 100% (the flat shoulder), " +
-      "but once O\u2082 drops below a critical threshold, saturation falls steeply. " +
+      "at high PAO\u2082 levels (>80 mmHg), saturation plateaus near 100% (the flat shoulder), " +
+      "but once PAO\u2082 drops into the 40-60 mmHg range, saturation falls steeply. " +
       "P50 determines where this transition occurs, while the Hill coefficient (n) " +
-      "controls how abrupt the transition is. The scale parameter converts the " +
-      "remaining O\u2082 volume into an effective partial pressure that the Hill " +
-      "equation can use.",
-    equation: "SpO\u2082_base = 100 \u00D7 PaO\u2082_eff\u207F / (PaO\u2082_eff\u207F + P50\u207F)",
-    latex: "SpO_{2,\\text{base}} = 100 \\cdot \\frac{PaO_{2,\\text{eff}}^{\\,n}}{PaO_{2,\\text{eff}}^{\\,n} + P_{50}^{\\,n}}",
-    params: ["scale", "p50", "n"],
+      "controls how abrupt the transition is. Combined with exponential washout, " +
+      "this naturally produces the plateau-then-drop pattern seen in real data.",
+    equation: "SpO\u2082 = 100 \u00D7 PAO\u2082\u207F / (PAO\u2082\u207F + P50_eff\u207F)",
+    latex: "SpO_2 = 100 \\cdot \\frac{PAO_2^{\\,n}}{PAO_2^{\\,n} + P_{50,\\text{eff}}^{\\,n}}",
+    params: ["p50_base", "n"],
   },
   {
-    title: "Residual Correction",
+    title: "Saturating Bohr Effect",
     icon: "correction",
     summary:
-      "A combined constant + exponentially decaying correction term that accounts " +
-      "for sensor bias and transient ischaemic effects.",
+      "CO\u2082 accumulation during apnea lowers blood pH, progressively " +
+      "right-shifting the ODC and accelerating late-phase desaturation.",
     detail:
-      "Finger pulse oximetry doesn't perfectly track arterial saturation. " +
-      "The residual offset (r_offset) captures constant biases from sensor " +
-      "placement and calibration. The decaying transient (r_decay \u00D7 e^(\u2212t/\u03C4)) " +
-      "models the initial ischaemic response at the fingertip: when a breath hold " +
-      "begins, peripheral blood flow and oxygenation can temporarily differ from " +
-      "arterial values before equilibrating. Together, these two terms allow the " +
-      "model to match the real sensor signal rather than ideal arterial SpO\u2082.",
-    equation: "residual(t) = r_offset + r_decay \u00D7 e^(\u2212t / \u03C4_decay)",
-    latex: "\\text{residual}(t) = r_{\\text{offset}} + r_{\\text{decay}} \\cdot e^{-t \\,/\\, \\tau_{\\text{decay}}}",
-    params: ["r_offset", "r_decay", "tau_decay"],
+      "During breath-holding, CO\u2082 is continuously produced by metabolism but " +
+      "cannot be exhaled. Rising PCO\u2082 decreases blood pH via the Henderson-Hasselbalch " +
+      "equation. This pH drop increases P50 (the Bohr effect), meaning haemoglobin " +
+      "releases oxygen more readily. The model uses a saturating exponential: " +
+      "P50 rises toward a maximum shift (bohr_max, typically 3-6 mmHg) with time " +
+      "constant tau_bohr. This prevents the unphysical unbounded P50 growth that " +
+      "a linear model would produce at long apnea durations.",
+    equation: "P50_eff(t) = P50_BASE + bohr_max \u00D7 (1 \u2212 e^(\u2212t_eff / \u03C4_bohr))",
+    latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\Delta_{\\max} \\cdot \\left(1 - e^{-t_{\\text{eff}} / \\tau_{\\text{bohr}}}\\right)",
+    params: ["bohr_max", "tau_bohr"],
   },
   {
-    title: "Finger-to-Arterial Lag",
+    title: "Finger-to-Arterial Lag & Offset",
     icon: "lag",
     summary:
-      "A time delay accounting for the circulatory transit time from lungs " +
-      "to the fingertip sensor.",
+      "A time delay for circulatory transit and a constant offset for sensor calibration.",
     detail:
       "Changes in arterial oxygen at the lungs take several seconds to reach " +
       "the finger pulse oximeter. This lag parameter shifts the effective time " +
-      "axis so that O\u2082 depletion begins after the delay, matching the observed " +
-      "sensor response. The lag is typically 10-30 seconds and depends on cardiac " +
+      "axis. The offset accounts for systematic bias from sensor placement " +
+      "and calibration. The lag is typically 10-30 seconds and depends on cardiac " +
       "output and peripheral vascular resistance.",
-    equation: "t_eff = max(t \u2212 lag, 0)",
+    equation: "t_eff = max(t \u2212 lag, 0); SpO\u2082 += r_offset",
     latex: "t_{\\text{eff}} = \\max(t - \\text{lag},\\, 0)",
-    params: ["lag"],
+    params: ["lag", "r_offset"],
   },
 ];
 
@@ -153,23 +149,23 @@ export const HOLD_TYPE_DESCRIPTIONS: Record<string, { name: string; description:
       "Hold initiated at the end of a normal exhalation, with the lungs at " +
       "their natural resting volume. Represents the most common starting " +
       "condition for involuntary apnoea events.",
-    o2Range: "800 \u2013 1,500 mL",
+    o2Range: "PAO\u2082 80 \u2013 120 mmHg",
   },
   RV: {
     name: "Residual Volume",
     description:
       "Hold initiated after a maximal forced exhalation, with the lungs at " +
       "their minimum volume. Produces the fastest desaturation due to the " +
-      "smallest initial O\u2082 store.",
-    o2Range: "400 \u2013 1,000 mL",
+      "smallest O\u2082 reserve and fastest washout.",
+    o2Range: "PAO\u2082 70 \u2013 110 mmHg",
   },
   FL: {
     name: "Full Lungs",
     description:
       "Hold initiated after a maximal inhalation (total lung capacity). " +
-      "Provides the largest O\u2082 store and therefore the slowest desaturation, " +
+      "Provides the largest O\u2082 reserve and slowest washout, " +
       "often used for longer breath-hold tests.",
-    o2Range: "1,800 \u2013 2,800 mL",
+    o2Range: "PAO\u2082 100 \u2013 200 mmHg",
   },
 };
 

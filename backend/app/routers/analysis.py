@@ -10,21 +10,21 @@ from app.models.schemas import (
     SensitivityPointResponse,
     ThresholdResponse,
 )
-from app.services.analysis import desaturation_rate, find_threshold_time, sensitivity_vo2
+from app.services.analysis import desaturation_rate, find_threshold_time, sensitivity_analysis
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 
 async def _get_model_params(db: AsyncSession, model_id: int):
-    """Load model and return HillParams, raising 404 if not found."""
+    """Load model and return ApneaModelParams, raising 404 if not found."""
     model = await db.get(ModelVersion, model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model version not found")
-    return model.to_hill_params()
+    return model.to_model_params()
 
 
 @router.get("/threshold", response_model=ThresholdResponse)
-async def threshold_analysis(
+async def threshold_analysis_endpoint(
     model_id: int = Query(..., description="Model version ID"),
     threshold: float = Query(40.0, ge=0, le=100, description="SpO2 threshold (%)"),
     t_max: float = Query(800.0, ge=60, le=1800, description="Max simulation time (s)"),
@@ -42,24 +42,26 @@ async def threshold_analysis(
 
 
 @router.get("/sensitivity", response_model=list[SensitivityPointResponse])
-async def sensitivity_analysis(
+async def sensitivity_analysis_endpoint(
     model_id: int = Query(..., description="Model version ID"),
+    param_name: str = Query("tau_washout", description="Parameter to vary"),
     reference_time_s: float = Query(372.0, ge=0, description="Reference time (s)"),
     threshold: float = Query(40.0, ge=0, le=100, description="SpO2 threshold (%)"),
     t_max: float = Query(800.0, ge=60, le=1800, description="Max simulation time (s)"),
     db: AsyncSession = Depends(get_db),
 ):
-    """VO2 sensitivity analysis: how crossing time changes with VO2 variation."""
+    """Parameter sensitivity analysis: how crossing time changes with parameter variation."""
     params = await _get_model_params(db, model_id)
-    results = sensitivity_vo2(
+    results = sensitivity_analysis(
         params,
+        param_name=param_name,
         reference_time_s=reference_time_s,
         threshold=threshold,
         t_max=t_max,
     )
     return [
         SensitivityPointResponse(
-            vo2=r.vo2,
+            param_value=r.param_value,
             pct_change=r.pct_change,
             crossing_time_s=r.crossing_time_s,
             margin_s=r.margin_s,

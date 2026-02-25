@@ -75,20 +75,21 @@ export interface FitPrediction {
   r_squared: number;
 }
 
-export interface HillParams {
-  o2_start: number;
-  vo2: number;
-  scale: number;
-  p50: number;
+export interface ApneaModelParams {
+  pao2_0: number;
+  pvo2: number;
+  tau_washout: number;
   n: number;
-  r_offset: number;
-  r_decay: number;
-  tau_decay: number;
+  bohr_max: number;
+  tau_bohr: number;
   lag: number;
+  r_offset: number;
+  // Fixed constant (not fitted), included for display
+  p50_base: number;
 }
 
 export interface FitPreviewResponse {
-  params: HillParams;
+  params: ApneaModelParams;
   r_squared: number;
   r_squared_per_hold: number[];
   objective_val: number;
@@ -100,7 +101,7 @@ export interface FitPreviewResponse {
 
 export interface FitSaveRequest {
   hold_type: string;
-  params: HillParams;
+  params: ApneaModelParams;
   hold_ids: number[];
   r_squared: number;
   objective_val: number;
@@ -116,7 +117,7 @@ export interface ModelVersionResponse {
   hold_type: string;
   version: number;
   is_active: boolean;
-  params: HillParams;
+  params: ApneaModelParams;
   r_squared: number;
   objective_val: number;
   converged: boolean;
@@ -148,7 +149,7 @@ export interface ThresholdResponse {
 }
 
 export interface SensitivityPoint {
-  vo2: number;
+  param_value: number;
   pct_change: number;
   crossing_time_s: number | null;
   margin_s: number | null;
@@ -165,8 +166,8 @@ export interface PredictionCurve {
   t: number[];
   spo2: number[];
   spo2_base: number[];
-  residual: number[];
-  o2_remaining: number[];
+  pao2: number[];
+  p50_eff: number[];
 }
 
 // ── Bounds ───────────────────────────────────────────────────

@@ -114,24 +114,28 @@ class FitPrediction(BaseModel):
     r_squared: float
 
 
-class HillParamsResponse(BaseModel):
-    """Fitted Hill model parameters."""
+class ApneaModelParamsResponse(BaseModel):
+    """Apnea model parameters (exponential washout + saturating Bohr effect).
 
-    o2_start: float
-    vo2: float
-    scale: float
-    p50: float
+    p50_base is a fixed haemoglobin constant, included for display only.
+    """
+
+    pao2_0: float
+    pvo2: float
+    tau_washout: float
     n: float
-    r_offset: float
-    r_decay: float
-    tau_decay: float
+    bohr_max: float
+    tau_bohr: float
     lag: float
+    r_offset: float
+    # Fixed constant (not fitted), included for API transparency
+    p50_base: float = 26.6
 
 
 class FitPreviewResponse(BaseModel):
     """Response from a fit preview (not yet saved)."""
 
-    params: HillParamsResponse
+    params: ApneaModelParamsResponse
     r_squared: float
     r_squared_per_hold: list[float]
     objective_val: float
@@ -145,7 +149,7 @@ class FitSaveRequest(BaseModel):
     """Request to save a fit as a new model version."""
 
     hold_type: str = Field(..., pattern="^(FRC|RV|FL)$")
-    params: HillParamsResponse
+    params: ApneaModelParamsResponse
     hold_ids: list[int]
     r_squared: float
     objective_val: float
@@ -164,7 +168,7 @@ class ModelVersionResponse(BaseModel):
     hold_type: str
     version: int
     is_active: bool
-    params: HillParamsResponse
+    params: ApneaModelParamsResponse
     r_squared: float
     objective_val: float
     converged: bool
@@ -205,9 +209,9 @@ class ThresholdResponse(BaseModel):
 
 
 class SensitivityPointResponse(BaseModel):
-    """One point in VO2 sensitivity analysis."""
+    """One point in parameter sensitivity analysis."""
 
-    vo2: float
+    param_value: float
     pct_change: float
     crossing_time_s: float | None
     margin_s: float | None
@@ -228,8 +232,8 @@ class PredictionCurveResponse(BaseModel):
     t: list[float]
     spo2: list[float]
     spo2_base: list[float]
-    residual: list[float]
-    o2_remaining: list[float]
+    pao2: list[float]
+    p50_eff: list[float]
 
 
 # ── Bounds ───────────────────────────────────────────────────────────────────

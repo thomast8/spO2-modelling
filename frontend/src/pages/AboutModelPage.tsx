@@ -36,39 +36,39 @@ import {
 import { chartColors, plotlyLayout } from "../theme";
 
 const PARAM_LABELS: Record<string, string> = {
-  o2_start: "O\u2082 Start",
-  vo2: "VO\u2082",
-  scale: "Scale",
-  p50: "P50",
-  n: "Hill Coefficient (n)",
-  r_offset: "Residual Offset",
-  r_decay: "Residual Decay",
-  tau_decay: "\u03C4 Decay",
+  pao2_0: "PAO\u2082 Initial",
+  pvo2: "PvO\u2082",
+  tau_washout: "\u03C4 Washout",
+  bohr_max: "Bohr Max \u0394P50",
+  tau_bohr: "\u03C4 Bohr",
   lag: "Lag",
+  r_offset: "Offset",
+  p50_base: "P50 Base (fixed)",
+  n: "Hill Coefficient (n)",
 };
 
 const PARAM_UNITS: Record<string, string> = {
-  o2_start: "mL",
-  vo2: "mL/min",
-  scale: "mL/mmHg-eq.",
-  p50: "mmHg-eq.",
-  n: "dimensionless",
-  r_offset: "% SpO\u2082",
-  r_decay: "% SpO\u2082",
-  tau_decay: "seconds",
+  pao2_0: "mmHg",
+  pvo2: "mmHg",
+  tau_washout: "seconds",
+  bohr_max: "mmHg",
+  tau_bohr: "seconds",
   lag: "seconds",
+  r_offset: "% SpO\u2082",
+  p50_base: "mmHg",
+  n: "dimensionless",
 };
 
 const PARAM_RANGES: Record<string, string> = {
-  o2_start: "400 \u2013 2,800",
-  vo2: "100 \u2013 300",
-  scale: "5 \u2013 50",
-  p50: "15 \u2013 60",
-  n: "2.0 \u2013 4.0",
-  r_offset: "\u22125.0 \u2013 5.0",
-  r_decay: "\u22123.0 \u2013 3.0",
-  tau_decay: "10 \u2013 90",
-  lag: "10 \u2013 30",
+  pao2_0: "70 \u2013 200",
+  pvo2: "25 \u2013 50",
+  tau_washout: "10 \u2013 250",
+  bohr_max: "2.0 \u2013 10.0",
+  tau_bohr: "60 \u2013 180",
+  lag: "5 \u2013 45",
+  r_offset: "\u22123.0 \u2013 3.0",
+  p50_base: "26.6 (fixed)",
+  n: "2.6 \u2013 3.2",
 };
 
 const COMPONENT_ICONS: Record<string, ReactElement> = {
@@ -81,16 +81,17 @@ const COMPONENT_ICONS: Record<string, ReactElement> = {
 const HOLD_TYPE_ORDER = ["FRC", "RV", "FL"] as const;
 
 // Default parameters for demonstration charts (typical FL hold)
+const P50_BASE = 26.6;
+
 const DEMO_PARAMS = {
-  o2_start: 2200,
-  vo2: 225,
-  scale: 20,
-  p50: 43,
-  n: 4.0,
-  r_offset: 5,
-  r_decay: 3,
-  tau_decay: 90,
-  lag: 12,
+  pao2_0: 120,
+  pvo2: 40,
+  tau_washout: 80,
+  n: 2.7,
+  bohr_max: 5.0,
+  tau_bohr: 120,
+  lag: 19,
+  r_offset: 0,
 };
 
 const CHART_HEIGHT = 280;
@@ -114,21 +115,21 @@ function linspace(start: number, end: number, n: number): number[] {
   return Array.from({ length: n }, (_, i) => start + i * step);
 }
 
-// ── Chart 1: O2 depletion over time ─────────────────────────
-function O2DepletionChart() {
-  const t = useMemo(() => linspace(0, 300, 200), []);
+// ── Chart 1: PAO2 washout over time ─────────────────────────
+function PAO2WashoutChart() {
+  const t = useMemo(() => linspace(0, 400, 300), []);
 
   const traces: Data[] = useMemo(() => {
     const holdTypes = [
-      { name: "FL (2200 mL)", o2: 2200, color: chartColors.spo2Fit },
-      { name: "FRC (1100 mL)", o2: 1100, color: chartColors.residual },
-      { name: "RV (600 mL)", o2: 600, color: chartColors.threshold },
+      { name: "FL (\u03C4=80s, PAO\u2082\u2080=120)", pao2_0: 120, tau: 80, color: chartColors.spo2Fit },
+      { name: "FRC (\u03C4=40s, PAO\u2082\u2080=100)", pao2_0: 100, tau: 40, color: chartColors.residual },
+      { name: "RV (\u03C4=25s, PAO\u2082\u2080=85)", pao2_0: 85, tau: 25, color: chartColors.threshold },
     ];
-    return holdTypes.map(({ name, o2, color }) => ({
+    return holdTypes.map(({ name, pao2_0, tau, color }) => ({
       x: t,
       y: t.map((ti) => {
         const tEff = Math.max(ti - DEMO_PARAMS.lag, 0);
-        return Math.max(o2 - (DEMO_PARAMS.vo2 / 60) * tEff, 0);
+        return DEMO_PARAMS.pvo2 + (pao2_0 - DEMO_PARAMS.pvo2) * Math.exp(-tEff / tau);
       }),
       type: "scatter" as const,
       mode: "lines" as const,
@@ -142,9 +143,9 @@ function O2DepletionChart() {
       data={traces}
       layout={{
         ...chartLayout,
-        title: { text: "O\u2082 Stores Over Time", font: { size: 13 } },
+        title: { text: "Alveolar PO\u2082 Washout", font: { size: 13 } },
         xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
-        yaxis: { ...chartLayout.yaxis, title: { text: "O\u2082 remaining (mL)" } },
+        yaxis: { ...chartLayout.yaxis, title: { text: "PAO\u2082 (mmHg)" } },
       }}
       config={{ displayModeBar: false, responsive: true }}
       useResizeHandler
@@ -165,7 +166,7 @@ function HillCurveChart() {
     ];
     const result: Data[] = hillCoeffs.map(({ n, name, color, dash }) => ({
       x: pao2,
-      y: pao2.map((p) => 100 * Math.pow(p, n) / (Math.pow(p, n) + Math.pow(DEMO_PARAMS.p50, n))),
+      y: pao2.map((p) => 100 * Math.pow(p, n) / (Math.pow(p, n) + Math.pow(P50_BASE, n))),
       type: "scatter" as const,
       mode: "lines" as const,
       name,
@@ -173,16 +174,16 @@ function HillCurveChart() {
     }));
     // P50 marker line
     result.push({
-      x: [DEMO_PARAMS.p50, DEMO_PARAMS.p50],
+      x: [P50_BASE, P50_BASE],
       y: [0, 50],
       type: "scatter",
       mode: "lines",
-      name: `P50 = ${DEMO_PARAMS.p50}`,
+      name: `P50 = ${P50_BASE}`,
       line: { color: "rgba(0,0,0,0.3)", width: 1, dash: "dot" },
       showlegend: true,
     });
     result.push({
-      x: [0, DEMO_PARAMS.p50],
+      x: [0, P50_BASE],
       y: [50, 50],
       type: "scatter",
       mode: "lines",
@@ -208,49 +209,37 @@ function HillCurveChart() {
   );
 }
 
-// ── Chart 3: Residual correction over time ───────────────────
-function ResidualChart() {
-  const t = useMemo(() => linspace(0, 300, 200), []);
+// ── Chart 3: Saturating Bohr effect — P50 shift over time ───
+function BohrEffectChart() {
+  const t = useMemo(() => linspace(0, 400, 300), []);
 
-  const traces: Data[] = useMemo(() => [
-    {
+  const traces: Data[] = useMemo(() => {
+    const bohrCurves = [
+      { bmax: 0.0, tau: 120, name: "No Bohr effect", color: "rgba(0,0,0,0.3)", dash: "dot" as const },
+      { bmax: 4.0, tau: 120, name: "\u0394max=4, \u03C4=120s (mild)", color: chartColors.spo2Fit, dash: "solid" as const },
+      { bmax: 6.0, tau: 90, name: "\u0394max=6, \u03C4=90s (strong)", color: chartColors.threshold, dash: "dash" as const },
+    ];
+    return bohrCurves.map(({ bmax, tau, name, color, dash }) => ({
       x: t,
-      y: t.map((ti) =>
-        DEMO_PARAMS.r_offset + DEMO_PARAMS.r_decay * Math.exp(-ti / DEMO_PARAMS.tau_decay),
-      ),
+      y: t.map((ti) => {
+        const tEff = Math.max(ti - DEMO_PARAMS.lag, 0);
+        return P50_BASE + bmax * (1 - Math.exp(-tEff / Math.max(tau, 0.01)));
+      }),
       type: "scatter" as const,
       mode: "lines" as const,
-      name: "Total residual",
-      line: { color: chartColors.spo2Fit, width: 2.5 },
-    },
-    {
-      x: t,
-      y: t.map(() => DEMO_PARAMS.r_offset),
-      type: "scatter" as const,
-      mode: "lines" as const,
-      name: `r_offset = ${DEMO_PARAMS.r_offset}`,
-      line: { color: chartColors.residual, width: 1.5, dash: "dash" as const },
-    },
-    {
-      x: t,
-      y: t.map((ti) =>
-        DEMO_PARAMS.r_decay * Math.exp(-ti / DEMO_PARAMS.tau_decay),
-      ),
-      type: "scatter" as const,
-      mode: "lines" as const,
-      name: "Transient decay",
-      line: { color: chartColors.threshold, width: 1.5, dash: "dot" as const },
-    },
-  ], [t]);
+      name,
+      line: { color, width: 2.5, dash },
+    }));
+  }, [t]);
 
   return (
     <Plot
       data={traces}
       layout={{
         ...chartLayout,
-        title: { text: "Residual Correction Components", font: { size: 13 } },
+        title: { text: "Saturating Bohr Effect: P50 Shift Over Time", font: { size: 13 } },
         xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
-        yaxis: { ...chartLayout.yaxis, title: { text: "Residual (% SpO\u2082)" } },
+        yaxis: { ...chartLayout.yaxis, title: { text: "P50 effective (mmHg)" } },
       }}
       config={{ displayModeBar: false, responsive: true }}
       useResizeHandler
@@ -261,15 +250,15 @@ function ResidualChart() {
 
 // ── Chart 4: Lag effect comparison ───────────────────────────
 function LagChart() {
-  const t = useMemo(() => linspace(0, 300, 200), []);
+  const t = useMemo(() => linspace(0, 400, 300), []);
 
   const computeSpo2 = useMemo(() => (ti: number, lag: number) => {
     const tEff = Math.max(ti - lag, 0);
-    const o2 = Math.max(DEMO_PARAMS.o2_start - (DEMO_PARAMS.vo2 / 60) * tEff, 0.01);
-    const pao2 = o2 / DEMO_PARAMS.scale;
+    const pao2 = DEMO_PARAMS.pvo2 + (DEMO_PARAMS.pao2_0 - DEMO_PARAMS.pvo2) * Math.exp(-tEff / DEMO_PARAMS.tau_washout);
+    const p50Eff = P50_BASE + DEMO_PARAMS.bohr_max * (1 - Math.exp(-tEff / Math.max(DEMO_PARAMS.tau_bohr, 0.01)));
     const base = 100 * Math.pow(pao2, DEMO_PARAMS.n) /
-      (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(DEMO_PARAMS.p50, DEMO_PARAMS.n));
-    return Math.min(Math.max(base, 0), 100);
+      (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(p50Eff, DEMO_PARAMS.n));
+    return Math.min(Math.max(base + DEMO_PARAMS.r_offset, 0), 100);
   }, []);
 
   const traces: Data[] = useMemo(() => [
@@ -317,37 +306,34 @@ function LagChart() {
 
 // ── Chart for full model ─────────────────────────────────────
 function FullModelChart() {
-  const t = useMemo(() => linspace(0, 300, 300), []);
+  const t = useMemo(() => linspace(0, 400, 400), []);
 
   const traces: Data[] = useMemo(() => {
     const p = DEMO_PARAMS;
-    const base = t.map((ti) => {
+    const pao2Arr = t.map((ti) => {
       const tEff = Math.max(ti - p.lag, 0);
-      const o2 = Math.max(p.o2_start - (p.vo2 / 60) * tEff, 0.01);
-      const pao2 = o2 / p.scale;
-      return 100 * Math.pow(pao2, p.n) / (Math.pow(pao2, p.n) + Math.pow(p.p50, p.n));
+      return p.pvo2 + (p.pao2_0 - p.pvo2) * Math.exp(-tEff / p.tau_washout);
     });
-    const residual = t.map((ti) => p.r_offset + p.r_decay * Math.exp(-ti / p.tau_decay));
-    const total = base.map((b, i) => Math.min(Math.max(b + residual[i], 0), 100));
+    const spo2 = t.map((ti, i) => {
+      const tEff = Math.max(ti - p.lag, 0);
+      const pao2 = pao2Arr[i];
+      const p50Eff = P50_BASE + p.bohr_max * (1 - Math.exp(-tEff / Math.max(p.tau_bohr, 0.01)));
+      const base = 100 * Math.pow(pao2, DEMO_PARAMS.n) / (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(p50Eff, DEMO_PARAMS.n));
+      return Math.min(Math.max(base + p.r_offset, 0), 100);
+    });
 
     return [
       {
-        x: t, y: base,
+        x: t, y: pao2Arr,
         type: "scatter" as const, mode: "lines" as const,
-        name: "SpO\u2082 base (Hill)",
-        line: { color: "rgba(37,99,235,0.4)", width: 1.5, dash: "dot" as const },
-      },
-      {
-        x: t, y: residual,
-        type: "scatter" as const, mode: "lines" as const,
-        name: "Residual correction",
+        name: "PAO\u2082 (mmHg)",
         line: { color: chartColors.residual, width: 1.5, dash: "dash" as const },
         yaxis: "y2",
       },
       {
-        x: t, y: total,
+        x: t, y: spo2,
         type: "scatter" as const, mode: "lines" as const,
-        name: "Final SpO\u2082(t)",
+        name: "SpO\u2082(t)",
         line: { color: chartColors.spo2Fit, width: 3 },
       },
     ];
@@ -363,11 +349,11 @@ function FullModelChart() {
         xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
         yaxis: { ...chartLayout.yaxis, title: { text: "SpO\u2082 (%)" }, range: [0, 105] },
         yaxis2: {
-          title: { text: "Residual (% SpO\u2082)" },
+          title: { text: "PAO\u2082 (mmHg)" },
           overlaying: "y",
           side: "right",
           showgrid: false,
-          range: [-2, 10],
+          range: [30, 130],
         },
       }}
       config={{ displayModeBar: false, responsive: true }}
@@ -379,9 +365,9 @@ function FullModelChart() {
 
 // Map component icons to their charts
 const COMPONENT_CHARTS: Record<string, () => ReactElement> = {
-  lungs: () => <O2DepletionChart />,
+  lungs: () => <PAO2WashoutChart />,
   curve: () => <HillCurveChart />,
-  correction: () => <ResidualChart />,
+  correction: () => <BohrEffectChart />,
   lag: () => <LagChart />,
 };
 
@@ -437,7 +423,7 @@ export default function AboutModelPage() {
       <SectionTitle>Model Equations</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         The complete model is built from four layered equations. Each transforms
-        the output of the previous step, from raw O&#x2082; stores down to the
+        the output of the previous step, from alveolar PO&#x2082; washout down to the
         final SpO&#x2082; reading at the finger.
       </Typography>
       <Paper sx={{ p: 2.5 }}>
@@ -519,8 +505,8 @@ export default function AboutModelPage() {
       {/* ── Parameter Reference ────────────────────────────────── */}
       <SectionTitle>Parameter Reference</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        All nine fitted parameters with their units, typical ranges (across all
-        hold types), and physical interpretation.
+        Eight fitted parameters and one fixed haemoglobin constant, with their
+        units, typical ranges (across all hold types), and physical interpretation.
       </Typography>
 
       <TableContainer component={Paper}>
@@ -558,8 +544,8 @@ export default function AboutModelPage() {
       <SectionTitle>Hold Types</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Breath holds are classified by the lung volume at hold onset. Each type
-        has different initial O&#x2082; stores and correspondingly different
-        parameter bounds for the fit.
+        has different initial PAO&#x2082; and washout time constants, with correspondingly
+        different parameter bounds for the fit.
       </Typography>
 
       <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
@@ -578,7 +564,7 @@ export default function AboutModelPage() {
               </Typography>
               <Divider sx={{ mb: 1 }} />
               <Typography variant="caption" color="text.secondary">
-                O&#x2082; start range:{" "}
+                Initial PAO&#x2082; range:{" "}
                 <Typography component="span" variant="caption" sx={{ fontWeight: 600, fontFamily: "monospace" }}>
                   {info.o2Range}
                 </Typography>

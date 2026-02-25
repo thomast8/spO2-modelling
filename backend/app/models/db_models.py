@@ -98,16 +98,15 @@ class ModelVersion(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # Hill model parameters
-    o2_start: Mapped[float] = mapped_column(Float, nullable=False)
-    vo2: Mapped[float] = mapped_column(Float, nullable=False)
-    scale_param: Mapped[float] = mapped_column(Float, nullable=False)
-    p50: Mapped[float] = mapped_column(Float, nullable=False)
+    # Apnea model parameters (exponential washout + saturating Bohr effect)
+    pao2_0: Mapped[float] = mapped_column(Float, nullable=False)
+    pvo2: Mapped[float] = mapped_column(Float, nullable=False)
+    tau_washout: Mapped[float] = mapped_column(Float, nullable=False)
     n: Mapped[float] = mapped_column(Float, nullable=False)
-    r_offset: Mapped[float] = mapped_column(Float, nullable=False)
-    r_decay: Mapped[float] = mapped_column(Float, nullable=False)
-    tau_decay: Mapped[float] = mapped_column(Float, nullable=False)
+    bohr_max: Mapped[float] = mapped_column(Float, nullable=False)
+    tau_bohr: Mapped[float] = mapped_column(Float, nullable=False)
     lag: Mapped[float] = mapped_column(Float, nullable=False)
+    r_offset: Mapped[float] = mapped_column(Float, nullable=False)
 
     # Fit diagnostics
     r_squared: Mapped[float] = mapped_column(Float, nullable=False)
@@ -121,20 +120,19 @@ class ModelVersion(Base):
         DateTime, server_default=func.now(), nullable=False
     )
 
-    def to_hill_params(self):
-        """Convert to HillParams dataclass."""
-        from app.services.hill_model import HillParams
+    def to_model_params(self):
+        """Convert to ApneaModelParams dataclass."""
+        from app.services.hill_model import ApneaModelParams
 
-        return HillParams(
-            o2_start=self.o2_start,
-            vo2=self.vo2,
-            scale=self.scale_param,
-            p50=self.p50,
+        return ApneaModelParams(
+            pao2_0=self.pao2_0,
+            pvo2=self.pvo2,
+            tau_washout=self.tau_washout,
             n=self.n,
-            r_offset=self.r_offset,
-            r_decay=self.r_decay,
-            tau_decay=self.tau_decay,
+            bohr_max=self.bohr_max,
+            tau_bohr=self.tau_bohr,
             lag=self.lag,
+            r_offset=self.r_offset,
         )
 
 

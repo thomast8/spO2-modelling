@@ -38,15 +38,15 @@ import { MODEL_SUMMARY, PARAM_DESCRIPTIONS } from "../constants/modelDescription
 const HOLD_TYPES: HoldType[] = ["FRC", "RV", "FL"];
 
 const PARAM_LABELS: Record<string, string> = {
-  o2_start: "O\u2082 Start (mL)",
-  vo2: "VO\u2082 (mL/min)",
-  scale: "Scale",
-  p50: "P50 (mmHg)",
-  n: "Hill Coefficient",
-  r_offset: "Residual Offset",
-  r_decay: "Residual Decay",
-  tau_decay: "Tau Decay (s)",
+  pao2_0: "PAO\u2082 Initial (mmHg)",
+  pvo2: "PvO\u2082 (mmHg)",
+  tau_washout: "\u03C4 Washout (s)",
+  bohr_max: "Bohr Max \u0394P50 (mmHg)",
+  tau_bohr: "\u03C4 Bohr (s)",
   lag: "Lag (s)",
+  r_offset: "Offset (%)",
+  p50_base: "P50 Base (fixed)",
+  n: "Hill Coefficient",
 };
 
 function ModelDetail({ model }: { model: ModelVersionResponse }) {

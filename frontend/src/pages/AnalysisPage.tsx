@@ -199,8 +199,8 @@ export default function AnalysisPage() {
                   <Table size="small">
                     <TableHead>
                       <TableRow>
-                        <TableCell>VO₂ Change</TableCell>
-                        <TableCell>VO₂ (mL/min)</TableCell>
+                        <TableCell>% Change</TableCell>
+                        <TableCell>Param Value</TableCell>
                         <TableCell>Crossing Time</TableCell>
                         <TableCell>Margin (s)</TableCell>
                         <TableCell>SpO₂ at Ref</TableCell>
@@ -215,7 +215,7 @@ export default function AnalysisPage() {
                           <TableCell sx={{ fontWeight: s.pct_change === 0 ? 700 : 400 }}>
                             {s.pct_change > 0 ? "+" : ""}{s.pct_change}%
                           </TableCell>
-                          <TableCell>{s.vo2.toFixed(1)}</TableCell>
+                          <TableCell>{s.param_value.toFixed(2)}</TableCell>
                           <TableCell>
                             {s.crossing_time_s
                               ? `${Math.floor(s.crossing_time_s / 60)}:${String(Math.round(s.crossing_time_s % 60)).padStart(2, "0")}`
