@@ -76,6 +76,7 @@ async def preview_fit(
             hold_type=request.hold_type,
             bounds_override=bounds_override,
             seed=request.seed,
+            weight_alpha=request.weight_alpha,
         )
     except Exception as e:
         logger.error(f"Fit failed: {e}")
@@ -104,8 +105,8 @@ async def save_fit(
         pvo2=request.params.pvo2,
         tau_washout=request.params.tau_washout,
         gamma=request.params.gamma,
-        bohr_max=request.params.bohr_max,
-        tau_bohr=request.params.tau_bohr,
+        paco2_0=request.params.paco2_0,
+        k_co2=request.params.k_co2,
         r_offset=request.params.r_offset,
     )
 

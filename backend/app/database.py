@@ -41,6 +41,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_migrate_n_to_gamma)
         await conn.run_sync(_migrate_drop_lag)
+        await conn.run_sync(_migrate_bohr_to_co2)
 
 
 def _migrate_n_to_gamma(conn) -> None:
@@ -69,3 +70,25 @@ def _migrate_drop_lag(conn) -> None:
         conn.execute(text("ALTER TABLE model_versions DROP COLUMN lag"))
         from loguru import logger
         logger.info("Migrated model_versions: dropped column 'lag'")
+
+
+def _migrate_bohr_to_co2(conn) -> None:
+    """Replace bohr_max/tau_bohr with paco2_0/k_co2 (CO2-driven Bohr effect).
+
+    Old model versions are incompatible; drop bohr_max and tau_bohr columns.
+    New columns (paco2_0, k_co2) are created by metadata.create_all.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(conn)
+    if "model_versions" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("model_versions")}
+    migrated = False
+    for old_col in ("bohr_max", "tau_bohr"):
+        if old_col in columns:
+            conn.execute(text(f"ALTER TABLE model_versions DROP COLUMN {old_col}"))
+            migrated = True
+    if migrated:
+        from loguru import logger
+        logger.info("Migrated model_versions: dropped bohr_max/tau_bohr, added paco2_0/k_co2")

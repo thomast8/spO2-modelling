@@ -98,13 +98,13 @@ class ModelVersion(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # Apnea model parameters (exponential washout + saturating Bohr effect)
+    # Apnea model parameters (exponential washout + CO2-driven Bohr effect)
     pao2_0: Mapped[float] = mapped_column(Float, nullable=False)
     pvo2: Mapped[float] = mapped_column(Float, nullable=False)
     tau_washout: Mapped[float] = mapped_column(Float, nullable=False)
     gamma: Mapped[float] = mapped_column(Float, nullable=False)
-    bohr_max: Mapped[float] = mapped_column(Float, nullable=False)
-    tau_bohr: Mapped[float] = mapped_column(Float, nullable=False)
+    paco2_0: Mapped[float] = mapped_column(Float, nullable=False)
+    k_co2: Mapped[float] = mapped_column(Float, nullable=False)
     r_offset: Mapped[float] = mapped_column(Float, nullable=False)
 
     # Fit diagnostics
@@ -128,8 +128,8 @@ class ModelVersion(Base):
             pvo2=self.pvo2,
             tau_washout=self.tau_washout,
             gamma=self.gamma,
-            bohr_max=self.bohr_max,
-            tau_bohr=self.tau_bohr,
+            paco2_0=self.paco2_0,
+            k_co2=self.k_co2,
             r_offset=self.r_offset,
         )
 

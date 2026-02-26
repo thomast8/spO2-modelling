@@ -80,11 +80,12 @@ export interface ApneaModelParams {
   pvo2: number;
   tau_washout: number;
   gamma: number;
-  bohr_max: number;
-  tau_bohr: number;
+  paco2_0: number;
+  k_co2: number;
   r_offset: number;
-  // Fixed constant (not fitted), included for display
+  // Fixed constants (not fitted), included for display
   p50_base: number;
+  bohr_beta: number;
 }
 
 export interface FitPreviewResponse {

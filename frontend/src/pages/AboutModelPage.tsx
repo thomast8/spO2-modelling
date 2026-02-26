@@ -39,10 +39,11 @@ const PARAM_LABELS: Record<string, string> = {
   pao2_0: "PAO\u2082 Initial",
   pvo2: "PvO\u2082",
   tau_washout: "\u03C4 Washout",
-  bohr_max: "Bohr Max \u0394P50",
-  tau_bohr: "\u03C4 Bohr",
+  paco2_0: "PaCO\u2082 Initial",
+  k_co2: "CO\u2082 Rise Rate",
   r_offset: "Offset",
   p50_base: "P50 Base (fixed)",
+  bohr_beta: "Bohr \u03B2 (fixed)",
   gamma: "Steepness (\u03B3)",
 };
 
@@ -50,22 +51,24 @@ const PARAM_UNITS: Record<string, string> = {
   pao2_0: "mmHg",
   pvo2: "mmHg",
   tau_washout: "seconds",
-  bohr_max: "mmHg",
-  tau_bohr: "seconds",
+  paco2_0: "mmHg",
+  k_co2: "mmHg/s",
   r_offset: "% SpO\u2082",
   p50_base: "mmHg",
+  bohr_beta: "mmHg/mmHg",
   gamma: "dimensionless",
 };
 
 const PARAM_RANGES: Record<string, string> = {
-  pao2_0: "70 \u2013 200",
-  pvo2: "25 \u2013 50",
+  pao2_0: "70 \u2013 250",
+  pvo2: "20 \u2013 55",
   tau_washout: "10 \u2013 250",
-  bohr_max: "2.0 \u2013 10.0",
-  tau_bohr: "60 \u2013 180",
-  r_offset: "\u22123.0 \u2013 3.0",
+  paco2_0: "15 \u2013 45",
+  k_co2: "0.02 \u2013 0.25",
+  r_offset: "\u22125.0 \u2013 5.0",
   p50_base: "26.6 (fixed)",
-  gamma: "0.8 \u2013 2.0",
+  bohr_beta: "0.48 (fixed)",
+  gamma: "0.8 \u2013 3.0",
 };
 
 const COMPONENT_ICONS: Record<string, ReactElement> = {
@@ -80,13 +83,15 @@ const HOLD_TYPE_ORDER = ["FRC", "RV", "FL"] as const;
 // Default parameters for demonstration charts (typical FL hold)
 const P50_BASE = 26.6;
 
+const BOHR_BETA = 0.48;
+
 const DEMO_PARAMS = {
   pao2_0: 120,
   pvo2: 40,
   tau_washout: 80,
   gamma: 1.0,
-  bohr_max: 5.0,
-  tau_bohr: 120,
+  paco2_0: 35.0,
+  k_co2: 0.06,
   r_offset: 0,
 };
 
@@ -217,20 +222,21 @@ function SeveringhausCurveChart() {
   );
 }
 
-// ── Chart 3: Saturating Bohr effect — P50 shift over time ───
+// ── Chart 3: CO2-driven Bohr effect — P50 shift over time ───
 function BohrEffectChart() {
   const t = useMemo(() => linspace(0, 400, 300), []);
 
   const traces: Data[] = useMemo(() => {
     const bohrCurves = [
-      { bmax: 0.0, tau: 120, name: "No Bohr effect", color: "rgba(0,0,0,0.3)", dash: "dot" as const },
-      { bmax: 4.0, tau: 120, name: "\u0394max=4, \u03C4=120s (mild)", color: chartColors.spo2Fit, dash: "solid" as const },
-      { bmax: 6.0, tau: 90, name: "\u0394max=6, \u03C4=90s (strong)", color: chartColors.threshold, dash: "dash" as const },
+      { paco2_0: 40, k: 0.001, name: "No hypervent (PaCO\u2082\u2080=40, k\u22480)", color: "rgba(0,0,0,0.3)", dash: "dot" as const },
+      { paco2_0: 35, k: 0.06, name: "Mild hypervent (PaCO\u2082\u2080=35, k=0.06)", color: chartColors.spo2Fit, dash: "solid" as const },
+      { paco2_0: 25, k: 0.10, name: "Deep hypervent (PaCO\u2082\u2080=25, k=0.10)", color: chartColors.threshold, dash: "dash" as const },
     ];
-    return bohrCurves.map(({ bmax, tau, name, color, dash }) => ({
+    return bohrCurves.map(({ paco2_0, k, name, color, dash }) => ({
       x: t,
       y: t.map((ti) => {
-        return P50_BASE + bmax * (1 - Math.exp(-ti / Math.max(tau, 0.01)));
+        const paco2 = paco2_0 + k * ti;
+        return P50_BASE + BOHR_BETA * (paco2 - 40.0);
       }),
       type: "scatter" as const,
       mode: "lines" as const,
@@ -244,7 +250,7 @@ function BohrEffectChart() {
       data={traces}
       layout={{
         ...chartLayout,
-        title: { text: "Saturating Bohr Effect: P50 Shift Over Time", font: { size: 13 } },
+        title: { text: "CO\u2082-Driven Bohr Effect: P50 Shift Over Time", font: { size: 13 } },
         xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
         yaxis: { ...chartLayout.yaxis, title: { text: "P50 effective (mmHg)" } },
       }}
@@ -266,8 +272,9 @@ function FullModelChart() {
     });
     const spo2 = t.map((ti, i) => {
       const pao2 = pao2Arr[i];
-      const p50Eff = P50_BASE + p.bohr_max * (1 - Math.exp(-ti / Math.max(p.tau_bohr, 0.01)));
-      const pao2Virtual = pao2 * (P50_BASE / p50Eff);
+      const paco2 = p.paco2_0 + p.k_co2 * ti;
+      const p50Eff = P50_BASE + BOHR_BETA * (paco2 - 40.0);
+      const pao2Virtual = pao2 * (P50_BASE / Math.max(p50Eff, 1.0));
       const pao2Adj = P50_BASE * Math.pow(Math.max(pao2Virtual, 0.01) / P50_BASE, p.gamma);
       const base = 100.0 / (1.0 + 23400.0 / (Math.pow(pao2Adj, 3) + 150.0 * pao2Adj));
       return Math.min(Math.max(base + p.r_offset, 0), 100);

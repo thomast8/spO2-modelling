@@ -22,28 +22,28 @@ DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
         "pao2_0": (80, 120),        # Smaller lung volume -> lower initial PAO2
         "pvo2": (20, 50),           # Can drop below 30 in prolonged apnea
         "tau_washout": (20, 100),    # Faster washout with less O2 reserve
-        "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
-        "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
-        "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
+        "gamma": (0.8, 3.0),       # Steepness exponent; 1.0 = standard Severinghaus
+        "paco2_0": (20, 45),        # Initial CO2 (mmHg); ~35-40 normal, ~20-30 post-hypervent
+        "k_co2": (0.02, 0.25),      # CO2 rise rate (mmHg/s); ~3-15 mmHg/min
         "r_offset": (-3.0, 3.0),
     },
     "RV": {
         "pao2_0": (70, 110),        # Minimal lung volume
         "pvo2": (20, 50),           # Can drop below 30 in prolonged apnea
         "tau_washout": (10, 80),     # Fastest washout
-        "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
-        "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
-        "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
+        "gamma": (0.8, 3.0),       # Steepness exponent; 1.0 = standard Severinghaus
+        "paco2_0": (25, 45),        # Less hyperventilation before RV holds
+        "k_co2": (0.02, 0.25),      # CO2 rise rate (mmHg/s)
         "r_offset": (-3.0, 3.0),
     },
     "FL": {
         "pao2_0": (100, 250),       # Full lungs; hyperventilation → PAO2 140-200+
-        "pvo2": (20, 50),           # Asymptotic PvO2; drops below 30 in prolonged apnea
-        "tau_washout": (50, 250),    # Slowest washout, largest O2 reserve
-        "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
-        "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
-        "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
-        "r_offset": (-3.0, 3.0),
+        "pvo2": (20, 55),           # Asymptotic PvO2; physiological range
+        "tau_washout": (20, 250),    # Slowest washout, largest O2 reserve
+        "gamma": (0.8, 3.0),       # Steepness exponent; 1.0 = standard Severinghaus
+        "paco2_0": (15, 45),        # Often hyperventilated before FL holds
+        "k_co2": (0.02, 0.25),      # CO2 rise rate (mmHg/s); ~3-15 mmHg/min
+        "r_offset": (-5.0, 5.0),
     },
 }
 
@@ -101,6 +101,7 @@ def fit_holds(
     seed: int = 42,
     maxiter: int = 5000,
     popsize: int = 60,
+    weight_alpha: float = 0.2,
 ) -> FitResult:
     """Fit apnea model to one or more holds of the same type.
 
@@ -114,6 +115,9 @@ def fit_holds(
         seed: Random seed for reproducibility
         maxiter: Maximum optimizer iterations
         popsize: Population size for differential evolution
+        weight_alpha: Desaturation upweighting factor. Points below 95% SpO2 get
+            weight = 1 + alpha * (95 - SpO2). At SpO2=70: weight=6. Set to 0 for
+            uniform weighting (plain SSE).
 
     Returns:
         FitResult with fitted parameters and diagnostics
@@ -127,7 +131,7 @@ def fit_holds(
 
     logger.info(
         f"Fitting {hold_type} model to {len(hold_data)} holds "
-        f"({total_points} data points), seed={seed}"
+        f"({total_points} data points), seed={seed}, weight_alpha={weight_alpha}"
     )
 
     def objective(param_array: np.ndarray) -> float:
@@ -135,7 +139,12 @@ def fit_holds(
         total_error = 0.0
         for hold in hold_data:
             pred = predict_spo2(hold["elapsed_s"], params)
-            total_error += np.sum((hold["spo2"] - pred) ** 2)
+            residuals_sq = (hold["spo2"] - pred) ** 2
+            if weight_alpha > 0:
+                weights = 1.0 + weight_alpha * np.maximum(95.0 - hold["spo2"], 0.0)
+                total_error += float(np.sum(weights * residuals_sq))
+            else:
+                total_error += float(np.sum(residuals_sq))
         return total_error
 
     result = differential_evolution(

@@ -16,18 +16,23 @@ export const PARAM_DESCRIPTIONS: Record<string, string> = {
     "Exponential O\u2082 washout time constant (seconds). Controls how fast alveolar " +
     "O\u2082 equilibrates with venous blood. Larger values mean slower O\u2082 depletion " +
     "and a longer SpO\u2082 plateau. Depends on lung volume and metabolic rate.",
-  bohr_max:
-    "Maximum Bohr effect P50 shift (mmHg). The asymptotic upper bound of the " +
-    "CO\u2082-driven P50 increase during apnea. Real physiological Bohr shift during " +
-    "a 3-minute apnea is ~3-6 mmHg. Accelerates late-phase desaturation.",
-  tau_bohr:
-    "CO\u2082 accumulation time constant (seconds). Controls how fast the Bohr " +
-    "P50 shift saturates. Smaller values mean CO\u2082 effects kick in earlier. " +
-    "Typical values are 80-150 seconds.",
+  paco2_0:
+    "Initial arterial CO\u2082 partial pressure (mmHg). Normal resting PaCO\u2082 is " +
+    "~40 mmHg. After hyperventilation it can drop to 20-30 mmHg, starting with " +
+    "a left-shifted ODC (higher O\u2082 affinity) before CO\u2082 accumulation reverses it.",
+  k_co2:
+    "CO\u2082 rise rate during apnea (mmHg/s). Metabolic CO\u2082 production causes " +
+    "a linear PaCO\u2082 increase. Typical values are 0.05-0.15 mmHg/s " +
+    "(3-9 mmHg/min). Higher values accelerate late-phase desaturation via " +
+    "the Bohr effect.",
   p50_base:
     "Fixed constant: baseline P50 of the oxygen-haemoglobin dissociation curve " +
     "(26.6 mmHg). The PaO\u2082 at which SpO\u2082 equals 50%. Not fitted \u2014 this is a " +
     "haemoglobin biochemistry constant.",
+  bohr_beta:
+    "Fixed constant: Bohr coefficient (0.48 mmHg P50 shift per mmHg CO\u2082). " +
+    "Determines how much the P50 changes per unit change in PaCO\u2082. " +
+    "Well-established from literature. Not fitted.",
   gamma:
     "Steepness exponent for the Severinghaus ODC. Controls how abrupt the " +
     "sigmoidal transition is. 1.0 = standard population-average curve, " +
@@ -39,11 +44,12 @@ export const PARAM_DESCRIPTIONS: Record<string, string> = {
 };
 
 export const MODEL_SUMMARY = {
-  title: "Exponential Alveolar Washout + Bohr Effect Model",
+  title: "Exponential Alveolar Washout + CO\u2082-Driven Bohr Effect Model",
   description:
     "Predicts SpO\u2082 desaturation during breath-hold apnoea by modelling " +
     "exponential alveolar O\u2082 washout (gradient-driven equilibration with venous blood), " +
-    "the Bohr effect (CO\u2082-driven rightward ODC shift), and the Severinghaus equation.",
+    "a CO\u2082-driven Bohr effect (linear PaCO\u2082 rise with physiological Bohr coefficient), " +
+    "and the Severinghaus equation.",
   equations: [
     {
       label: "Alveolar washout",
@@ -51,9 +57,9 @@ export const MODEL_SUMMARY = {
       latex: "PAO_2(t) = PvO_2 + (PAO_{2,0} - PvO_2) \\cdot e^{-t / \\tau}",
     },
     {
-      label: "Saturating Bohr effect",
-      formula: "P50_eff(t) = P50_BASE + bohr_max \u00D7 (1 \u2212 e^(\u2212t / \u03C4_bohr))",
-      latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\Delta_{\\max} \\cdot \\left(1 - e^{-t / \\tau_{\\text{bohr}}}\\right)",
+      label: "CO\u2082-driven Bohr effect",
+      formula: "PaCO\u2082(t) = PaCO\u2082\u2080 + k_CO\u2082 \u00D7 t;  P50_eff = 26.6 + 0.48 \u00D7 (PaCO\u2082 \u2212 40)",
+      latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\beta \\cdot \\left(\\underbrace{PaCO_{2,0} + k_{CO_2} \\cdot t}_{PaCO_2(t)} - 40\\right)",
     },
     {
       label: "Severinghaus equation",
@@ -101,22 +107,22 @@ export const MODEL_COMPONENTS = [
     params: ["p50_base", "gamma"],
   },
   {
-    title: "Saturating Bohr Effect",
+    title: "CO\u2082-Driven Bohr Effect",
     icon: "correction",
     summary:
       "CO\u2082 accumulation during apnea lowers blood pH, progressively " +
       "right-shifting the ODC and accelerating late-phase desaturation.",
     detail:
       "During breath-holding, CO\u2082 is continuously produced by metabolism but " +
-      "cannot be exhaled. Rising PCO\u2082 decreases blood pH via the Henderson-Hasselbalch " +
-      "equation. This pH drop increases P50 (the Bohr effect), meaning haemoglobin " +
-      "releases oxygen more readily. The model uses a saturating exponential: " +
-      "P50 rises toward a maximum shift (bohr_max, typically 3-6 mmHg) with time " +
-      "constant tau_bohr. This prevents the unphysical unbounded P50 growth that " +
-      "a linear model would produce at long apnea durations.",
-    equation: "P50_eff(t) = P50_BASE + bohr_max \u00D7 (1 \u2212 e^(\u2212t / \u03C4_bohr))",
-    latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\Delta_{\\max} \\cdot \\left(1 - e^{-t / \\tau_{\\text{bohr}}}\\right)",
-    params: ["bohr_max", "tau_bohr"],
+      "cannot be exhaled. PaCO\u2082 rises linearly from paco2_0 (which may be below 40 mmHg " +
+      "after hyperventilation) at rate k_co2. The Bohr coefficient (\u03B2 = 0.48 mmHg/mmHg, " +
+      "fixed from literature) converts the CO\u2082 change into a P50 shift: " +
+      "\u0394P50 = 0.48 \u00D7 (PaCO\u2082 \u2212 40). This can start negative " +
+      "(left-shifted, higher affinity) if the subject hyperventilated, then cross " +
+      "zero and become a rightward shift as CO\u2082 accumulates beyond 40 mmHg.",
+    equation: "P50_eff(t) = P50_BASE + \u03B2 \u00D7 (PaCO\u2082\u2080 + k_CO\u2082\u00D7t \u2212 40)",
+    latex: "P_{50,\\text{eff}}(t) = P_{50,\\text{BASE}} + \\beta \\cdot \\left(PaCO_{2,0} + k_{CO_2} \\cdot t - 40\\right)",
+    params: ["paco2_0", "k_co2", "bohr_beta"],
   },
   {
     title: "Sensor Calibration Offset",

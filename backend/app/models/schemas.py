@@ -102,6 +102,12 @@ class FitPreviewRequest(BaseModel):
     hold_ids: list[int]
     bounds_override: dict[str, BoundsOverride] | None = None
     seed: int = 42
+    weight_alpha: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Desaturation upweighting factor. 0 = uniform, 0.2 = default.",
+    )
 
 
 class FitPrediction(BaseModel):
@@ -115,20 +121,21 @@ class FitPrediction(BaseModel):
 
 
 class ApneaModelParamsResponse(BaseModel):
-    """Apnea model parameters (exponential washout + saturating Bohr effect).
+    """Apnea model parameters (exponential washout + CO2-driven Bohr effect).
 
-    p50_base is a fixed haemoglobin constant, included for display only.
+    p50_base and bohr_beta are fixed physiological constants, included for display.
     """
 
     pao2_0: float
     pvo2: float
     tau_washout: float
     gamma: float
-    bohr_max: float
-    tau_bohr: float
+    paco2_0: float
+    k_co2: float
     r_offset: float
-    # Fixed constant (not fitted), included for API transparency
+    # Fixed constants (not fitted), included for API transparency
     p50_base: float = 26.6
+    bohr_beta: float = 0.48
 
 
 class FitPreviewResponse(BaseModel):

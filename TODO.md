@@ -20,6 +20,13 @@
 
 _(newest first)_
 
+- [x] Replace saturating Bohr with CO2-driven Bohr effect (2026-02-26)
+  - Ablation study: 10 model variants tested, CO2 Bohr wins (4.5% lower RMSE, same 7 params)
+  - `bohr_max` + `tau_bohr` → `paco2_0` + `k_co2` with fixed Bohr coefficient (β=0.48)
+  - Handles hypocapnic starts (post-hyperventilation), better late-phase residuals
+  - Widened gamma bounds (2.0 → 3.0), updated all bounds per hold type
+  - DB migration: auto-drops `bohr_max`/`tau_bohr`, adds `paco2_0`/`k_co2` on startup
+  - Updated model equations, frontend charts/descriptions, tests
 - [x] Remove lag parameter — not needed, absorbed by tau_washout and ODC plateau (2026-02-25)
   - 8 → 7 fitted parameters, removes identifiability issue (lag vs tau_washout confounding)
   - DB migration: auto-drops `model_versions.lag` column on startup

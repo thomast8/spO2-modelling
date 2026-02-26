@@ -15,7 +15,7 @@ A webapp for modelling SpO2 desaturation during breath-hold apnea sessions using
 
 - **Backend**: FastAPI + SQLAlchemy (async) + SQLite
 - **Frontend**: React + TypeScript + MUI + Plotly
-- **Model**: Severinghaus ODC with gamma steepness exponent, fitted via differential evolution
+- **Model**: Severinghaus ODC with CO2-driven Bohr effect and gamma steepness, fitted via differential evolution
 
 ## Development
 
@@ -50,12 +50,13 @@ uv run pytest
 
 ## Model
 
-The model uses exponential alveolar O2 washout, a saturating Bohr effect, and the Severinghaus (1979) ODC with adjustable steepness:
+The model uses exponential alveolar O2 washout, a CO2-driven Bohr effect with physiological Bohr coefficient, and the Severinghaus (1979) ODC with adjustable steepness:
 
 ```
 PAO2(t)      = pvo2 + (pao2_0 - pvo2) * exp(-t / tau_washout)
-P50_eff(t)   = P50_BASE + bohr_max * (1 - exp(-t / tau_bohr))
-PAO2_virtual = PAO2 * (P50_BASE / P50_eff)          [Bohr shift]
+PaCO2(t)     = paco2_0 + k_co2 * t                  [linear CO2 rise]
+P50_eff(t)   = 26.6 + 0.48 * (PaCO2 - 40)           [Bohr shift]
+PAO2_virtual = PAO2 * (P50_BASE / P50_eff)           [virtual PO2]
 PAO2_adj     = P50_BASE * (PAO2_virtual / P50_BASE)^gamma  [steepness]
 SpO2(t)      = r_offset + 100 / (1 + 23400/(PAO2_adj^3 + 150*PAO2_adj))
 ```

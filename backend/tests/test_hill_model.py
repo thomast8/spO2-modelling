@@ -18,8 +18,8 @@ def _default_params() -> ApneaModelParams:
         pvo2=40.0,          # mmHg, typical mixed venous
         tau_washout=80.0,    # seconds
         gamma=1.0,           # standard Severinghaus steepness
-        bohr_max=5.0,        # mmHg, moderate Bohr shift
-        tau_bohr=120.0,      # seconds, CO2 time constant
+        paco2_0=35.0,        # mmHg, mild hyperventilation
+        k_co2=0.06,          # mmHg/s (~3.6 mmHg/min)
         r_offset=0.0,        # no calibration bias
     )
 
@@ -98,7 +98,7 @@ class TestPredictSpo2:
         base = _default_params().to_dict()
         # Use low pvo2 so PO2 actually crosses below P50
         base["pvo2"] = 20.0
-        base["bohr_max"] = 8.0
+        base["k_co2"] = 0.10
         params_low = ApneaModelParams.from_dict({**base, "gamma": 1.0})
         params_high = ApneaModelParams.from_dict({**base, "gamma": 1.5})
 
@@ -122,10 +122,12 @@ class TestPredictSpo2:
         assert np.all(shifted >= base - 0.01)
 
     def test_bohr_effect_accelerates_late_desaturation(self):
-        """Positive bohr_max should cause lower SpO2 at late times."""
+        """Higher CO2 rise rate should cause lower SpO2 at late times."""
         base = _default_params().to_dict()
-        params_no_bohr = ApneaModelParams.from_dict({**base, "bohr_max": 0.0})
-        params_bohr = ApneaModelParams.from_dict({**base, "bohr_max": 8.0})
+        # Minimal Bohr: start at normal CO2, very slow rise
+        params_no_bohr = ApneaModelParams.from_dict({**base, "paco2_0": 40.0, "k_co2": 0.001})
+        # Strong Bohr: start at normal CO2, fast rise
+        params_bohr = ApneaModelParams.from_dict({**base, "paco2_0": 40.0, "k_co2": 0.15})
 
         t = np.array([200.0, 300.0])
         spo2_no_bohr = predict_spo2(t, params_no_bohr)
@@ -173,11 +175,12 @@ class TestPredictComponents:
         assert pao2[-1] < params.pvo2 + 2.0
 
     def test_p50_eff_increases(self):
-        """P50_eff should increase over time (Bohr effect)."""
+        """P50_eff should increase over time (CO2 rises -> Bohr shift)."""
         params = _default_params()
         t = np.linspace(0, 300, 50)
         components = predict_spo2_components(t, params)
-        assert np.all(np.diff(components["p50_eff"]) >= 0)
+        # With positive k_co2, P50_eff increases linearly
+        assert np.all(np.diff(components["p50_eff"]) > 0)
 
 
 class TestApneaModelParamsConversion:
