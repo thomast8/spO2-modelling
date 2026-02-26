@@ -104,7 +104,6 @@ async def save_model_version(
         gamma=params.gamma,
         bohr_max=params.bohr_max,
         tau_bohr=params.tau_bohr,
-        lag=params.lag,
         r_offset=params.r_offset,
         r_squared=r_squared,
         objective_val=objective_val,

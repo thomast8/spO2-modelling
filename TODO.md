@@ -20,6 +20,10 @@
 
 _(newest first)_
 
+- [x] Remove lag parameter — not needed, absorbed by tau_washout and ODC plateau (2026-02-25)
+  - 8 → 7 fitted parameters, removes identifiability issue (lag vs tau_washout confounding)
+  - DB migration: auto-drops `model_versions.lag` column on startup
+  - Updated model equations, frontend charts/descriptions, tests
 - [x] Replace Hill equation ODC with Severinghaus (1979) + gamma steepness exponent (2026-02-25)
   - Standalone comparison script: Hill vs Kelman vs Severinghaus (+gamma variants)
   - Severinghaus+gamma wins: R²=0.9956 vs Hill R²=0.9915 (same 8 params, 3/8 at bounds vs 6/8)

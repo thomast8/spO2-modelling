@@ -8,9 +8,8 @@ Models SpO2 desaturation during breath-hold apnea using:
 - Severinghaus (1979) oxygen-haemoglobin dissociation curve with gamma steepness
 
 Model structure:
-    t_eff        = max(t - lag, 0)
-    PAO2(t)      = pvo2 + (pao2_0 - pvo2) * exp(-t_eff / tau_washout)
-    P50_eff(t)   = P50_BASE + bohr_max * (1 - exp(-t_eff / tau_bohr))
+    PAO2(t)      = pvo2 + (pao2_0 - pvo2) * exp(-t / tau_washout)
+    P50_eff(t)   = P50_BASE + bohr_max * (1 - exp(-t / tau_bohr))
     PAO2_virtual = PAO2 * (P50_BASE / P50_eff)          [Bohr shift]
     PAO2_adj     = P50_BASE * (PAO2_virtual / P50_BASE)^gamma  [steepness]
     SpO2(t)      = clip(r_offset + 100 / (1 + 23400/(PAO2_adj^3 + 150*PAO2_adj)), 0, 100)
@@ -43,7 +42,6 @@ class ApneaModelParams:
     gamma: float         # Steepness exponent (1.0 = standard Severinghaus, >1 steeper)
     bohr_max: float      # Maximum Bohr P50 shift (mmHg)
     tau_bohr: float      # CO2 accumulation time constant (seconds)
-    lag: float           # Finger-to-arterial circulation delay (seconds)
     r_offset: float      # Constant SpO2 offset for sensor calibration (%)
 
     def to_dict(self) -> dict:
@@ -93,16 +91,14 @@ def predict_spo2(t: np.ndarray, params: ApneaModelParams) -> np.ndarray:
     Returns:
         Predicted SpO2 (%) array, same shape as t
     """
-    t_eff = np.maximum(t - params.lag, 0.0)
-
     # Exponential PAO2 decline (alveolar-capillary equilibration)
     pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
-        -t_eff / max(params.tau_washout, 0.01)
+        -t / max(params.tau_washout, 0.01)
     )
 
     # Saturating Bohr effect: CO2 accumulates with exponential saturation
     p50_eff = ApneaModelParams.P50_BASE + params.bohr_max * (
-        1.0 - np.exp(-t_eff / max(params.tau_bohr, 0.01))
+        1.0 - np.exp(-t / max(params.tau_bohr, 0.01))
     )
 
     # Virtual PO2 for Bohr effect: right-shifts the ODC
@@ -126,13 +122,11 @@ def predict_spo2_components(
 
     Returns dict with keys: total, base, pao2, p50_eff
     """
-    t_eff = np.maximum(t - params.lag, 0.0)
-
     pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
-        -t_eff / max(params.tau_washout, 0.01)
+        -t / max(params.tau_washout, 0.01)
     )
     p50_eff = ApneaModelParams.P50_BASE + params.bohr_max * (
-        1.0 - np.exp(-t_eff / max(params.tau_bohr, 0.01))
+        1.0 - np.exp(-t / max(params.tau_bohr, 0.01))
     )
 
     # Virtual PO2 for Bohr effect + power transform for steepness

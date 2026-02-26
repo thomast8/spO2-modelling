@@ -25,7 +25,6 @@ DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
         "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
         "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
         "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
-        "lag": (5, 60),            # Cold periphery / vasoconstriction
         "r_offset": (-3.0, 3.0),
     },
     "RV": {
@@ -35,7 +34,6 @@ DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
         "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
         "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
         "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
-        "lag": (5, 60),            # Cold periphery / vasoconstriction
         "r_offset": (-3.0, 3.0),
     },
     "FL": {
@@ -45,7 +43,6 @@ DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
         "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
         "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
         "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
-        "lag": (5, 60),            # Cold periphery / vasoconstriction → up to ~60s
         "r_offset": (-3.0, 3.0),
     },
 }

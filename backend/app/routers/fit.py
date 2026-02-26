@@ -106,7 +106,6 @@ async def save_fit(
         gamma=request.params.gamma,
         bohr_max=request.params.bohr_max,
         tau_bohr=request.params.tau_bohr,
-        lag=request.params.lag,
         r_offset=request.params.r_offset,
     )
 

@@ -40,6 +40,7 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_migrate_n_to_gamma)
+        await conn.run_sync(_migrate_drop_lag)
 
 
 def _migrate_n_to_gamma(conn) -> None:
@@ -54,3 +55,17 @@ def _migrate_n_to_gamma(conn) -> None:
         conn.execute(text("ALTER TABLE model_versions RENAME COLUMN n TO gamma"))
         from loguru import logger
         logger.info("Migrated model_versions: renamed column 'n' → 'gamma'")
+
+
+def _migrate_drop_lag(conn) -> None:
+    """Drop model_versions.lag column (no longer a fitted parameter)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(conn)
+    if "model_versions" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("model_versions")}
+    if "lag" in columns:
+        conn.execute(text("ALTER TABLE model_versions DROP COLUMN lag"))
+        from loguru import logger
+        logger.info("Migrated model_versions: dropped column 'lag'")

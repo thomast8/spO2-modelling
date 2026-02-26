@@ -105,7 +105,6 @@ class ModelVersion(Base):
     gamma: Mapped[float] = mapped_column(Float, nullable=False)
     bohr_max: Mapped[float] = mapped_column(Float, nullable=False)
     tau_bohr: Mapped[float] = mapped_column(Float, nullable=False)
-    lag: Mapped[float] = mapped_column(Float, nullable=False)
     r_offset: Mapped[float] = mapped_column(Float, nullable=False)
 
     # Fit diagnostics
@@ -131,7 +130,6 @@ class ModelVersion(Base):
             gamma=self.gamma,
             bohr_max=self.bohr_max,
             tau_bohr=self.tau_bohr,
-            lag=self.lag,
             r_offset=self.r_offset,
         )
 

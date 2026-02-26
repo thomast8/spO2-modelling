@@ -126,7 +126,6 @@ class ApneaModelParamsResponse(BaseModel):
     gamma: float
     bohr_max: float
     tau_bohr: float
-    lag: float
     r_offset: float
     # Fixed constant (not fitted), included for API transparency
     p50_base: float = 26.6

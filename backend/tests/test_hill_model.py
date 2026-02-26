@@ -20,7 +20,6 @@ def _default_params() -> ApneaModelParams:
         gamma=1.0,           # standard Severinghaus steepness
         bohr_max=5.0,        # mmHg, moderate Bohr shift
         tau_bohr=120.0,      # seconds, CO2 time constant
-        lag=19.0,            # seconds
         r_offset=0.0,        # no calibration bias
     )
 
@@ -82,8 +81,8 @@ class TestPredictSpo2:
         t = np.arange(0, 400, 1.0)
         spo2 = predict_spo2(t, params)
 
-        # During lag + early plateau, SpO2 should stay very high
-        plateau_mask = t < 60
+        # During early plateau, SpO2 should stay high (ODC is flat above ~80 mmHg)
+        plateau_mask = t < 30
         assert np.all(spo2[plateau_mask] > 95.0), "SpO2 should stay >95% during early plateau"
 
         # At late times, SpO2 should have dropped significantly
@@ -155,16 +154,16 @@ class TestPredictComponents:
         np.testing.assert_allclose(components["total"], expected, atol=0.01)
 
     def test_pao2_decreases(self):
-        """PAO2 should decrease over time (after lag)."""
+        """PAO2 should decrease over time."""
         params = _default_params()
-        t = np.linspace(20, 300, 50)
+        t = np.linspace(0, 300, 50)
         components = predict_spo2_components(t, params)
         assert np.all(np.diff(components["pao2"]) <= 0)
 
     def test_pao2_decays_toward_pvo2(self):
         """PAO2 should decay exponentially toward pvo2."""
         params = _default_params()
-        t = np.linspace(20, 600, 100)
+        t = np.linspace(0, 600, 100)
         components = predict_spo2_components(t, params)
         pao2 = components["pao2"]
 
@@ -176,7 +175,7 @@ class TestPredictComponents:
     def test_p50_eff_increases(self):
         """P50_eff should increase over time (Bohr effect)."""
         params = _default_params()
-        t = np.linspace(20, 300, 50)
+        t = np.linspace(0, 300, 50)
         components = predict_spo2_components(t, params)
         assert np.all(np.diff(components["p50_eff"]) >= 0)
 

@@ -53,9 +53,8 @@ uv run pytest
 The model uses exponential alveolar O2 washout, a saturating Bohr effect, and the Severinghaus (1979) ODC with adjustable steepness:
 
 ```
-t_eff        = max(t - lag, 0)
-PAO2(t)      = pvo2 + (pao2_0 - pvo2) * exp(-t_eff / tau_washout)
-P50_eff(t)   = P50_BASE + bohr_max * (1 - exp(-t_eff / tau_bohr))
+PAO2(t)      = pvo2 + (pao2_0 - pvo2) * exp(-t / tau_washout)
+P50_eff(t)   = P50_BASE + bohr_max * (1 - exp(-t / tau_bohr))
 PAO2_virtual = PAO2 * (P50_BASE / P50_eff)          [Bohr shift]
 PAO2_adj     = P50_BASE * (PAO2_virtual / P50_BASE)^gamma  [steepness]
 SpO2(t)      = r_offset + 100 / (1 + 23400/(PAO2_adj^3 + 150*PAO2_adj))
