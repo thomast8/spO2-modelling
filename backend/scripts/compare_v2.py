@@ -8,12 +8,13 @@ Improvements tested:
   A) Weighted loss (desaturation-region upweighting)
   B) Logit-slope kappa (replaces gamma PO2 power transform)
   C) CO2-driven Bohr (replaces time-based saturating Bohr)
-  D) Fixed sensor low-pass filter (tau_sensor=8s)
-  E) Beat-based sensor model (using HR data)
-  F) Linear PAO2 trajectory (vs exponential)
+  W) Weibull/stretched exponential PAO2 (replaces gamma)
+  WG) Weibull + gamma (tests if both are needed)
 
 Usage:
     cd backend && uv run python scripts/compare_v2.py
+    cd backend && uv run python scripts/compare_v2.py --holds 6
+    cd backend && uv run python scripts/compare_v2.py --holds 6 --trim 270
 """
 
 import sqlite3
@@ -291,15 +292,35 @@ class CO2BohrParams:
     r_offset: float
 
 
-CO2_BOHR_BOUNDS = [
-    (80, 200),  # pao2_0
-    (20, 55),  # pvo2
-    (20, 300),  # tau_washout
-    (0.8, 3.0),  # gamma (widened: let steepness find its level)
-    (15, 50),  # paco2_0
-    (0.02, 0.30),  # k_co2
-    (-5.0, 5.0),  # r_offset
-]
+CO2_BOHR_BOUNDS_BY_TYPE = {
+    "FL": [
+        (100, 250),    # pao2_0: full lungs, hyperventilated
+        (20, 55),      # pvo2
+        (20, 250),     # tau_washout: slowest, largest O2 reserve
+        (0.8, 3.0),   # gamma
+        (15, 45),      # paco2_0: often hyperventilated
+        (0.02, 0.25),  # k_co2
+        (-5.0, 5.0),   # r_offset
+    ],
+    "FRC": [
+        (80, 120),     # pao2_0: normal lung volume
+        (20, 50),      # pvo2
+        (20, 100),     # tau_washout: faster than FL
+        (0.8, 3.0),   # gamma
+        (20, 45),      # paco2_0
+        (0.02, 0.25),  # k_co2
+        (-3.0, 3.0),   # r_offset
+    ],
+    "RV": [
+        (70, 110),     # pao2_0: minimal lung volume
+        (20, 50),      # pvo2
+        (10, 80),      # tau_washout: fastest
+        (0.8, 3.0),   # gamma
+        (25, 45),      # paco2_0: less hyperventilation
+        (0.02, 0.25),  # k_co2
+        (-3.0, 3.0),   # r_offset
+    ],
+}
 CO2_BOHR_PARAM_NAMES = [f.name for f in fields(CO2BohrParams)]
 
 
@@ -456,6 +477,299 @@ def predict_kappa_co2(t, params, **_kw):
     s_base = severinghaus_spo2(pao2_virtual)
     s_true = apply_logit_slope(s_base, params.kappa)
     spo2 = params.r_offset + s_true
+    return np.clip(spo2, 0.0, 100.0)
+
+
+# ── Model W: Weibull PAO2 (replaces gamma with eta) ─────────────────────────
+
+
+@dataclass
+class WeibullParams:
+    pao2_0: float
+    pvo2: float
+    tau_washout: float
+    eta: float  # Weibull shape: 1.0=exponential, >1=slow-then-fast
+    paco2_0: float
+    k_co2: float
+    r_offset: float
+
+
+WEIBULL_BOUNDS_BY_TYPE = {
+    "FL": [
+        (100, 250),    # pao2_0
+        (20, 55),      # pvo2
+        (20, 250),     # tau_washout
+        (0.5, 5.0),   # eta
+        (15, 45),      # paco2_0
+        (0.02, 0.25),  # k_co2
+        (-5.0, 5.0),   # r_offset
+    ],
+    "FRC": [
+        (80, 120),     # pao2_0
+        (20, 50),      # pvo2
+        (20, 100),     # tau_washout
+        (0.5, 5.0),   # eta
+        (20, 45),      # paco2_0
+        (0.02, 0.25),  # k_co2
+        (-3.0, 3.0),   # r_offset
+    ],
+    "RV": [
+        (70, 110),     # pao2_0
+        (20, 50),      # pvo2
+        (10, 80),      # tau_washout
+        (0.5, 5.0),   # eta
+        (25, 45),      # paco2_0
+        (0.02, 0.25),  # k_co2
+        (-3.0, 3.0),   # r_offset
+    ],
+}
+WEIBULL_PARAM_NAMES = [f.name for f in fields(WeibullParams)]
+
+
+def predict_weibull(t, params, **_kw):
+    """Weibull PAO2 washout + CO2-driven Bohr + Severinghaus (no gamma)."""
+    pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
+        -(t / max(params.tau_washout, 0.01)) ** params.eta
+    )
+    paco2 = params.paco2_0 + params.k_co2 * t
+    p50_eff = P50_BASE + BOHR_BETA * (paco2 - 40.0)
+    pao2_virtual = pao2 * (P50_BASE / np.maximum(p50_eff, 1.0))
+    # No gamma — standard Severinghaus on virtual PO2
+    spo2 = params.r_offset + severinghaus_spo2(pao2_virtual)
+    return np.clip(spo2, 0.0, 100.0)
+
+
+# ── Model WG: Weibull + gamma (tests if both are needed) ───────────────────
+
+
+@dataclass
+class WeibullGammaParams:
+    pao2_0: float
+    pvo2: float
+    tau_washout: float
+    eta: float
+    gamma: float
+    paco2_0: float
+    k_co2: float
+    r_offset: float
+
+
+WEIBULL_GAMMA_BOUNDS = [
+    (80, 200),     # pao2_0
+    (20, 55),      # pvo2
+    (20, 300),     # tau_washout
+    (0.5, 5.0),   # eta
+    (0.8, 3.0),   # gamma
+    (15, 50),      # paco2_0
+    (0.02, 0.30),  # k_co2
+    (-5.0, 5.0),   # r_offset
+]
+WEIBULL_GAMMA_PARAM_NAMES = [f.name for f in fields(WeibullGammaParams)]
+
+
+def predict_weibull_gamma(t, params, **_kw):
+    """Weibull PAO2 washout + CO2-driven Bohr + gamma + Severinghaus."""
+    pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
+        -(t / max(params.tau_washout, 0.01)) ** params.eta
+    )
+    paco2 = params.paco2_0 + params.k_co2 * t
+    p50_eff = P50_BASE + BOHR_BETA * (paco2 - 40.0)
+    pao2_virtual = pao2 * (P50_BASE / np.maximum(p50_eff, 1.0))
+    pao2_adj = P50_BASE * (
+        (np.maximum(pao2_virtual, 0.01) / P50_BASE) ** params.gamma
+    )
+    spo2 = params.r_offset + severinghaus_spo2(pao2_adj)
+    return np.clip(spo2, 0.0, 100.0)
+
+
+# ── Model D: CO2-O2 gas displacement coupling ──────────────────────────────
+
+
+@dataclass
+class CO2DisplaceParams:
+    pao2_0: float
+    pvo2: float
+    tau_washout: float
+    gamma: float
+    paco2_0: float
+    k_co2: float
+    lambda_rq: float  # CO2-O2 displacement factor (~1/RQ, ~1.25)
+    r_offset: float
+
+
+CO2_DISPLACE_BOUNDS = [
+    (80, 200),     # pao2_0
+    (20, 55),      # pvo2
+    (20, 300),     # tau_washout
+    (0.8, 3.0),   # gamma
+    (15, 50),      # paco2_0
+    (0.02, 0.30),  # k_co2
+    (0.5, 3.0),   # lambda_rq (physiological ~1/RQ = 1.0-1.25)
+    (-5.0, 5.0),   # r_offset
+]
+CO2_DISPLACE_PARAM_NAMES = [f.name for f in fields(CO2DisplaceParams)]
+
+
+def predict_co2_displace(t, params, **_kw):
+    """Exponential washout + CO2-driven Bohr + CO2-O2 displacement + gamma."""
+    pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
+        -t / max(params.tau_washout, 0.01)
+    )
+    paco2 = params.paco2_0 + params.k_co2 * t
+    # CO2 displaces O2 in alveolar gas (partial pressure bookkeeping)
+    pao2_eff = pao2 - params.lambda_rq * (paco2 - params.paco2_0)
+    pao2_eff = np.maximum(pao2_eff, 0.01)
+    # Bohr shift on the effective PAO2
+    p50_eff = P50_BASE + BOHR_BETA * (paco2 - 40.0)
+    pao2_virtual = pao2_eff * (P50_BASE / np.maximum(p50_eff, 1.0))
+    pao2_adj = P50_BASE * (
+        (np.maximum(pao2_virtual, 0.01) / P50_BASE) ** params.gamma
+    )
+    spo2 = params.r_offset + severinghaus_spo2(pao2_adj)
+    return np.clip(spo2, 0.0, 100.0)
+
+
+# ── Model WD: Weibull + CO2-O2 displacement (no gamma) ─────────────────────
+
+
+@dataclass
+class WeibullDisplaceParams:
+    pao2_0: float
+    pvo2: float
+    tau_washout: float
+    eta: float
+    paco2_0: float
+    k_co2: float
+    lambda_rq: float
+    r_offset: float
+
+
+WEIBULL_DISPLACE_BOUNDS = [
+    (80, 200),     # pao2_0
+    (20, 55),      # pvo2
+    (20, 300),     # tau_washout
+    (0.5, 5.0),   # eta
+    (15, 50),      # paco2_0
+    (0.02, 0.30),  # k_co2
+    (0.5, 3.0),   # lambda_rq
+    (-5.0, 5.0),   # r_offset
+]
+WEIBULL_DISPLACE_PARAM_NAMES = [f.name for f in fields(WeibullDisplaceParams)]
+
+
+def predict_weibull_displace(t, params, **_kw):
+    """Weibull washout + CO2 displacement + Bohr + Severinghaus (no gamma)."""
+    pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
+        -(t / max(params.tau_washout, 0.01)) ** params.eta
+    )
+    paco2 = params.paco2_0 + params.k_co2 * t
+    pao2_eff = np.maximum(pao2 - params.lambda_rq * (paco2 - params.paco2_0), 0.01)
+    p50_eff = P50_BASE + BOHR_BETA * (paco2 - 40.0)
+    pao2_virtual = pao2_eff * (P50_BASE / np.maximum(p50_eff, 1.0))
+    spo2 = params.r_offset + severinghaus_spo2(pao2_virtual)
+    return np.clip(spo2, 0.0, 100.0)
+
+
+# ── Model S: Shunt mixing (replaces gamma with s_max + tau_shunt) ───────────
+#
+# Physiology: increasing shunt fraction (absorption atelectasis, VQ mismatch)
+# mixes venous blood into the arterial stream. This naturally creates a
+# late "cliff" without distorting the ODC.
+#
+# S_arterial(t) = (1 - s(t)) * S_endcap(t) + s(t) * S_venous
+# s(t) = s_max * (1 - exp(-t / tau_shunt))  [saturating shunt increase]
+# S_venous = Severinghaus(pvo2)  [derived, not fitted separately]
+
+
+@dataclass
+class ShuntParams:
+    pao2_0: float
+    pvo2: float
+    tau_washout: float
+    paco2_0: float
+    k_co2: float
+    s_max: float      # maximum shunt fraction (0-1)
+    tau_shunt: float   # shunt development time constant (s)
+    r_offset: float
+
+
+SHUNT_BOUNDS = [
+    (80, 200),     # pao2_0
+    (20, 55),      # pvo2 (also determines S_venous via Severinghaus)
+    (20, 300),     # tau_washout
+    (15, 50),      # paco2_0
+    (0.02, 0.30),  # k_co2
+    (0.01, 0.60),  # s_max (1-60% shunt; severe atelectasis can reach 30-50%)
+    (20, 400),     # tau_shunt (shunt develops over minutes)
+    (-5.0, 5.0),   # r_offset
+]
+SHUNT_PARAM_NAMES = [f.name for f in fields(ShuntParams)]
+
+
+def predict_shunt(t, params, **_kw):
+    """Exponential washout + CO2 Bohr + shunt mixing (no gamma)."""
+    pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
+        -t / max(params.tau_washout, 0.01)
+    )
+    paco2 = params.paco2_0 + params.k_co2 * t
+    p50_eff = P50_BASE + BOHR_BETA * (paco2 - 40.0)
+    pao2_virtual = pao2 * (P50_BASE / np.maximum(p50_eff, 1.0))
+    # End-capillary saturation (no gamma — standard Severinghaus)
+    s_cap = severinghaus_spo2(pao2_virtual)
+    # Venous saturation (constant, derived from pvo2)
+    s_ven = severinghaus_spo2(params.pvo2)
+    # Time-varying shunt fraction
+    shunt = params.s_max * (1.0 - np.exp(-t / max(params.tau_shunt, 0.01)))
+    # Arterial = weighted mix
+    spo2 = params.r_offset + (1.0 - shunt) * s_cap + shunt * s_ven
+    return np.clip(spo2, 0.0, 100.0)
+
+
+# ── Model SG: Shunt + gamma (tests if both needed) ─────────────────────────
+
+
+@dataclass
+class ShuntGammaParams:
+    pao2_0: float
+    pvo2: float
+    tau_washout: float
+    gamma: float
+    paco2_0: float
+    k_co2: float
+    s_max: float
+    tau_shunt: float
+    r_offset: float
+
+
+SHUNT_GAMMA_BOUNDS = [
+    (80, 200),     # pao2_0
+    (20, 55),      # pvo2
+    (20, 300),     # tau_washout
+    (0.8, 3.0),   # gamma
+    (15, 50),      # paco2_0
+    (0.02, 0.30),  # k_co2
+    (0.01, 0.60),  # s_max
+    (20, 400),     # tau_shunt
+    (-5.0, 5.0),   # r_offset
+]
+SHUNT_GAMMA_PARAM_NAMES = [f.name for f in fields(ShuntGammaParams)]
+
+
+def predict_shunt_gamma(t, params, **_kw):
+    """Exponential washout + CO2 Bohr + gamma + shunt mixing."""
+    pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
+        -t / max(params.tau_washout, 0.01)
+    )
+    paco2 = params.paco2_0 + params.k_co2 * t
+    p50_eff = P50_BASE + BOHR_BETA * (paco2 - 40.0)
+    pao2_virtual = pao2 * (P50_BASE / np.maximum(p50_eff, 1.0))
+    pao2_adj = P50_BASE * (
+        (np.maximum(pao2_virtual, 0.01) / P50_BASE) ** params.gamma
+    )
+    s_cap = severinghaus_spo2(pao2_adj)
+    s_ven = severinghaus_spo2(params.pvo2)
+    shunt = params.s_max * (1.0 - np.exp(-t / max(params.tau_shunt, 0.01)))
+    spo2 = params.r_offset + (1.0 - shunt) * s_cap + shunt * s_ven
     return np.clip(spo2, 0.0, 100.0)
 
 
@@ -632,16 +946,39 @@ def print_comparison(t, spo2, results):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 
-def run_comparison(hold_id: int, label: str = ""):
+def run_comparison(
+    hold_id: int,
+    label: str = "",
+    trim_t: float | None = None,
+    hold_type: str = "FL",
+):
     """Run comparison for a single hold."""
-    print(f"\nLoading hold {hold_id} ({label}) data...")
+    print(f"\n{'#'*80}")
+    print(f"  Hold {hold_id} ({label}) — type: {hold_type}")
+    print(f"{'#'*80}")
     t, spo2, hr = load_hold_data(hold_id)
+
+    if trim_t is not None:
+        mask = t <= trim_t
+        n_before = len(t)
+        t, spo2, hr = t[mask], spo2[mask], hr[mask]
+        print(f"  TRIMMED at {trim_t}s: {n_before} -> {len(t)} data points")
+
+    # Warn about pulse ox floor (device floors at 40%)
+    if spo2.min() <= 42:
+        print(f"  *** WARNING: min SpO2={spo2.min():.0f}% — at/near pulse ox floor (40%) ***")
+        print(f"  *** Data below ~42% is censored and unreliable ***")
+
     print(f"  {len(t)} data points, t=[{t[0]:.0f}, {t[-1]:.0f}]s")
     print(f"  SpO2=[{spo2.min():.0f}, {spo2.max():.0f}]%")
     print(f"  HR=[{hr.min():.0f}, {hr.max():.0f}] bpm")
 
     drop_count = np.sum(spo2 < 95)
     print(f"  Points in drop region (<95%): {drop_count}/{len(spo2)}")
+
+    # Select per-hold-type bounds
+    co2_bohr_bounds = CO2_BOHR_BOUNDS_BY_TYPE[hold_type]
+    weibull_bounds = WEIBULL_BOUNDS_BY_TYPE[hold_type]
 
     all_results = []
 
@@ -651,41 +988,29 @@ def run_comparison(hold_id: int, label: str = ""):
         SigmoidParams, SIGMOID_BOUNDS, SIGMOID_PARAM_NAMES,
     ))
 
-    # 1. Current v1.2 baseline
+    # C. CO2-driven Bohr (current production model)
     all_results.append(fit_model(
-        t, spo2, hr, "v1.2 baseline", predict_v12,
-        V12Params, V12_BOUNDS, V12_PARAM_NAMES,
+        t, spo2, hr, "CO2 Bohr", predict_co2_bohr,
+        CO2BohrParams, co2_bohr_bounds, CO2_BOHR_PARAM_NAMES,
     ))
 
-    # A. v1.2 + weighted loss
+    # C+A. CO2-driven Bohr + weighted loss
     all_results.append(fit_model(
-        t, spo2, hr, "v1.2 weighted", predict_v12,
-        V12Params, V12_BOUNDS, V12_PARAM_NAMES,
+        t, spo2, hr, "CO2 Bohr wtd", predict_co2_bohr,
+        CO2BohrParams, co2_bohr_bounds, CO2_BOHR_PARAM_NAMES,
         use_weighted_loss=True,
     ))
 
-    # B. Logit-slope kappa
+    # W. Weibull PAO2 (replaces gamma with eta)
     all_results.append(fit_model(
-        t, spo2, hr, "Kappa (logit)", predict_kappa,
-        KappaParams, KAPPA_BOUNDS, KAPPA_PARAM_NAMES,
+        t, spo2, hr, "Weibull (eta)", predict_weibull,
+        WeibullParams, weibull_bounds, WEIBULL_PARAM_NAMES,
     ))
 
-    # C. CO2-driven Bohr
+    # W+A. Weibull + weighted loss
     all_results.append(fit_model(
-        t, spo2, hr, "CO2 Bohr", predict_co2_bohr,
-        CO2BohrParams, CO2_BOHR_BOUNDS, CO2_BOHR_PARAM_NAMES,
-    ))
-
-    # BC. Kappa + CO2-Bohr combined
-    all_results.append(fit_model(
-        t, spo2, hr, "Kappa+CO2", predict_kappa_co2,
-        KappaCO2Params, KAPPA_CO2_BOUNDS, KAPPA_CO2_PARAM_NAMES,
-    ))
-
-    # BC+A. Kappa + CO2-Bohr + weighted loss
-    all_results.append(fit_model(
-        t, spo2, hr, "Kappa+CO2 wtd", predict_kappa_co2,
-        KappaCO2Params, KAPPA_CO2_BOUNDS, KAPPA_CO2_PARAM_NAMES,
+        t, spo2, hr, "Weibull wtd", predict_weibull,
+        WeibullParams, weibull_bounds, WEIBULL_PARAM_NAMES,
         use_weighted_loss=True,
     ))
 
@@ -693,12 +1018,27 @@ def run_comparison(hold_id: int, label: str = ""):
 
 
 def main():
-    import sys as _sys
+    import argparse
 
-    hold_ids = [int(x) for x in _sys.argv[1:]] if len(_sys.argv) > 1 else [6]
-    labels = {4: "deep", 5: "deep", 6: "FL"}
-    for hid in hold_ids:
-        run_comparison(hid, labels.get(hid, ""))
+    parser = argparse.ArgumentParser(description="SpO2 model ablation study")
+    parser.add_argument(
+        "--holds", type=int, nargs="+", default=[6],
+        help="Hold IDs to fit (default: 6)",
+    )
+    parser.add_argument(
+        "--trim", type=float, default=None,
+        help="Trim data at this elapsed time (seconds). For hand-lift diagnostic: --trim 270",
+    )
+    args = parser.parse_args()
+
+    labels = {1: "FL-nowarmup", 2: "FRC", 3: "RV", 4: "RV-floor", 5: "FRC", 6: "FL"}
+    hold_types = {1: "FL", 2: "FRC", 3: "RV", 4: "RV", 5: "FRC", 6: "FL"}
+    for hid in args.holds:
+        run_comparison(
+            hid, labels.get(hid, ""),
+            trim_t=args.trim,
+            hold_type=hold_types.get(hid, "FL"),
+        )
 
 
 if __name__ == "__main__":

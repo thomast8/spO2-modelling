@@ -19,9 +19,9 @@ from app.services.hill_model import ApneaModelParams, compute_r_squared, predict
 # Format: {param_name: (lower, upper)}
 DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "FRC": {
-        "pao2_0": (80, 120),        # Smaller lung volume -> lower initial PAO2
-        "pvo2": (20, 50),           # Can drop below 30 in prolonged apnea
-        "tau_washout": (20, 100),    # Faster washout with less O2 reserve
+        "pao2_0": (80, 140),        # Smaller lung volume; some hyperventilation headroom
+        "pvo2": (15, 50),           # Can drop below 20 in deep/prolonged apnea
+        "tau_washout": (20, 150),    # Faster than FL, but allow longer for deep holds
         "gamma": (0.8, 3.0),       # Steepness exponent; 1.0 = standard Severinghaus
         "paco2_0": (20, 45),        # Initial CO2 (mmHg); ~35-40 normal, ~20-30 post-hypervent
         "k_co2": (0.02, 0.25),      # CO2 rise rate (mmHg/s); ~3-15 mmHg/min
