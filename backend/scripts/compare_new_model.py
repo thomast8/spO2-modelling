@@ -177,40 +177,25 @@ class ModelVariant:
     loss_fn: callable
 
 
+def predict_production(t, hr, params):
+    """Production model: Sev+gamma + saturating Bohr (7 params).
+
+    This is what's actually deployed in hill_model.py / fitter.py.
+    """
+    pao2_0, pvo2, tau_washout, gamma, bohr_max, tau_bohr, r_offset = params
+    pao2 = pao2_exponential(t, pao2_0, pvo2, tau_washout)
+    p50 = p50_saturating(t, P50_BASE, bohr_max, tau_bohr)
+    sa = odc_severinghaus(pao2, p50, gamma)
+    return obs_none(sa, t, r_offset)
+
+
 def predict_baseline(t, hr, params):
-    """Variant 1: Current Severinghaus+gamma model (7 params)."""
+    """Improved baseline: Sev+gamma + CO2-linear Bohr (7 params)."""
     pao2_0, pvo2, tau_washout, gamma, paco2_0, k_co2, r_offset = params
     pao2 = pao2_exponential(t, pao2_0, pvo2, tau_washout)
     p50 = p50_linear_co2(t, paco2_0, k_co2)
     sa = odc_severinghaus(pao2, p50, gamma)
     return obs_none(sa, t, r_offset)
-
-
-def predict_proposal(t, hr, params):
-    """Variant 2: Weibull + saturating P50 + Hill + delay/filter (9 params)."""
-    pa0, tau_w, p_w, p50_start, delta_p50, tau_co2, d, tau_f, r_offset = params
-    pao2 = pao2_weibull(t, pa0, tau_w, p_w)
-    p50 = p50_saturating(t, p50_start, delta_p50, tau_co2)
-    sa = odc_hill(pao2, p50, 2.7)  # n fixed at 2.7
-    return obs_delay_filter(sa, t, d, tau_f, r_offset)
-
-
-def predict_hybrid(t, hr, params):
-    """Variant 3: Weibull + linear CO2 Bohr + Sev+gamma + delay/filter (9 params)."""
-    pa0, tau_w, p_w, gamma, paco2_0, k_co2, d, tau_f, r_offset = params
-    pao2 = pao2_weibull(t, pa0, tau_w, p_w)
-    p50 = p50_linear_co2(t, paco2_0, k_co2)
-    sa = odc_severinghaus(pao2, p50, gamma)
-    return obs_delay_filter(sa, t, d, tau_f, r_offset)
-
-
-def predict_current_plus_obs(t, hr, params):
-    """Variant 4: Current model + delay/filter observation model (9 params)."""
-    pao2_0, pvo2, tau_washout, gamma, paco2_0, k_co2, d, tau_f, r_offset = params
-    pao2 = pao2_exponential(t, pao2_0, pvo2, tau_washout)
-    p50 = p50_linear_co2(t, paco2_0, k_co2)
-    sa = odc_severinghaus(pao2, p50, gamma)
-    return obs_delay_filter(sa, t, d, tau_f, r_offset)
 
 
 def predict_richards(t, hr, params):
@@ -259,88 +244,14 @@ BASELINE_BOUNDS = {
     ],
 }
 
-PROPOSAL_BOUNDS = {
-    "FL": [
-        (90, 120),    # pa0 (Weibull initial)
-        (150, 1200),  # tau_w (Weibull time constant)
-        (1.0, 4.5),   # p_w (Weibull shape)
-        (15, 30),     # p50_start
-        (0, 20),      # delta_p50
-        (30, 600),    # tau_co2
-        (5, 30),      # d (delay)
-        (0.5, 8),     # tau_f (filter)
-        (-3.0, 3.0),  # r_offset
-    ],
-    "FRC": [
-        (80, 110),
-        (80, 700),
-        (1.0, 4.0),
-        (15, 30),
-        (0, 20),
-        (30, 600),
-        (5, 30),
-        (0.5, 8),
-        (-3.0, 3.0),
-    ],
-    "RV": [
-        (70, 100),
-        (40, 500),
-        (1.0, 3.5),
-        (15, 30),
-        (0, 20),
-        (30, 600),
-        (5, 30),
-        (0.5, 8),
-        (-3.0, 3.0),
-    ],
-}
-
-HYBRID_BOUNDS = {
-    "FL": [
-        (90, 120),    # pa0
-        (150, 1200),  # tau_w
-        (1.0, 4.5),   # p_w
-        (0.8, 2.0),   # gamma
-        (25, 45),     # paco2_0
-        (0.02, 0.15), # k_co2
-        (5, 30),      # d
-        (0.5, 8),     # tau_f
-        (-3.0, 3.0),  # r_offset
-    ],
-    "FRC": [
-        (80, 110),
-        (80, 700),
-        (1.0, 4.0),
-        (0.8, 2.0),
-        (30, 45),
-        (0.02, 0.15),
-        (5, 30),
-        (0.5, 8),
-        (-3.0, 3.0),
-    ],
-    "RV": [
-        (70, 100),
-        (40, 500),
-        (1.0, 3.5),
-        (0.8, 2.0),
-        (35, 50),
-        (0.02, 0.15),
-        (5, 30),
-        (0.5, 8),
-        (-3.0, 3.0),
-    ],
-}
-
-CURRENT_OBS_BOUNDS = {
+PRODUCTION_BOUNDS = {
     "FL": [
         (100, 250),   # pao2_0
         (20, 50),     # pvo2
         (50, 250),    # tau_washout
         (0.8, 2.0),   # gamma
-        (25, 45),     # paco2_0
-        (0.02, 0.15), # k_co2
-        (5, 30),      # d
-        (0.5, 8),     # tau_f
+        (2.0, 15.0),  # bohr_max (mmHg P50 shift)
+        (40, 250),    # tau_bohr (s)
         (-3.0, 3.0),  # r_offset
     ],
     "FRC": [
@@ -348,10 +259,8 @@ CURRENT_OBS_BOUNDS = {
         (20, 50),
         (20, 100),
         (0.8, 2.0),
-        (30, 45),
-        (0.02, 0.15),
-        (5, 30),
-        (0.5, 8),
+        (2.0, 15.0),
+        (40, 250),
         (-3.0, 3.0),
     ],
     "RV": [
@@ -359,10 +268,8 @@ CURRENT_OBS_BOUNDS = {
         (20, 50),
         (10, 80),
         (0.8, 2.0),
-        (35, 50),
-        (0.02, 0.15),
-        (5, 30),
-        (0.5, 8),
+        (2.0, 15.0),
+        (40, 250),
         (-3.0, 3.0),
     ],
 }
@@ -393,32 +300,18 @@ RICHARDS_BOUNDS = {
 
 VARIANTS = [
     ModelVariant(
-        name="Baseline",
+        name="Production",
+        param_names=["pao2_0", "pvo2", "tau_washout", "gamma", "bohr_max", "tau_bohr", "r_offset"],
+        bounds_by_type=PRODUCTION_BOUNDS,
+        predict_fn=predict_production,
+        loss_fn=lambda obs, pred: loss_weighted_sse(obs, pred, alpha=3.0),
+    ),
+    ModelVariant(
+        name="CO2-Bohr",
         param_names=["pao2_0", "pvo2", "tau_washout", "gamma", "paco2_0", "k_co2", "r_offset"],
         bounds_by_type=BASELINE_BOUNDS,
         predict_fn=predict_baseline,
         loss_fn=lambda obs, pred: loss_weighted_sse(obs, pred, alpha=3.0),
-    ),
-    ModelVariant(
-        name="Proposal",
-        param_names=["pa0", "tau_w", "p_w", "p50_start", "delta_p50", "tau_co2", "d", "tau_f", "r_offset"],
-        bounds_by_type=PROPOSAL_BOUNDS,
-        predict_fn=predict_proposal,
-        loss_fn=lambda obs, pred: loss_censored_vec(obs, pred),
-    ),
-    ModelVariant(
-        name="Hybrid",
-        param_names=["pa0", "tau_w", "p_w", "gamma", "paco2_0", "k_co2", "d", "tau_f", "r_offset"],
-        bounds_by_type=HYBRID_BOUNDS,
-        predict_fn=predict_hybrid,
-        loss_fn=lambda obs, pred: loss_censored_vec(obs, pred),
-    ),
-    ModelVariant(
-        name="Current+obs",
-        param_names=["pao2_0", "pvo2", "tau_washout", "gamma", "paco2_0", "k_co2", "d", "tau_f", "r_offset"],
-        bounds_by_type=CURRENT_OBS_BOUNDS,
-        predict_fn=predict_current_plus_obs,
-        loss_fn=lambda obs, pred: loss_censored_vec(obs, pred),
     ),
     ModelVariant(
         name="Richards",
