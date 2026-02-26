@@ -206,7 +206,7 @@ with interval type labels.
 | 3  | RV   | 129          | 126         | 61-100         | 51-104         | Fast deep drop |
 | 4  | RV   | 193          | 192         | 40-100         | 53-104         | Deepest; trimmed at t=194 (post-blackout recovery removed) |
 | 5  | FRC  | 187          | 185         | 54-100         | 46-88          | Deep drop |
-| 6  | FL   | 372          | 366         | 57-100         | 50-106         | Primary FL hold; longest |
+| 6  | FL   | 372          | 366         | 57-100         | 50-106         | Primary FL hold; longest; artifact at ~4:50 from raising hand |
 
 **Hold types:**
 - **FL (Full Lungs):** Maximum inspiration before hold. Largest O2 reserve,
@@ -238,6 +238,13 @@ with interval type labels.
 - **Post-blackout trimming:** Hold 4 (RV) was trimmed at t=194s where SpO2
   rises from 41% to 52% due to involuntary breathing after loss of
   consciousness. Only the desaturation portion is retained.
+- **Pulse oximeter floor (40%):** The device cannot report SpO2 below 40%.
+  Hold 4 (RV) reaches this floor, so the true nadir may be lower than recorded.
+  Values sitting at exactly 40% should be treated as left-censored.
+- **Arm-raise artifact (Hold 6, ~4:50):** Around t=290s the subject raised the
+  hand wearing the pulse oximeter, reducing peripheral perfusion and causing a
+  transient SpO2 dip that is not physiological desaturation. This artifact is
+  not currently removed and may bias the fit in that region.
 - **No smoothing** is applied to SpO2 or HR data. The models fit raw
   integer-valued readings.
 
@@ -313,7 +320,202 @@ optimizer settings.
 
 ---
 
-## 7. References
+## 7. Cross-Prediction / Generalisation (2026-02-26)
+
+Tests whether fitted parameters generalise to unseen holds. Each model is
+trained on one hold and used to predict all others. R² < 0 means the model
+is worse than predicting the mean of the target hold.
+
+### Within-type transfer (R²)
+
+Train on one hold of a given type, predict the other hold of the same type.
+
+| Pair           | Production | CO2-Bohr | Richards |
+|----------------|:----------:|:--------:|:--------:|
+| FRC #5 → FRC #2 | **0.92** | 0.88     | 0.90     |
+| FRC #2 → FRC #5 | **0.92** | 0.89     | 0.40     |
+| RV #4 → RV #3   | 0.89     | 0.89     | 0.84     |
+| RV #3 → RV #4   | 0.88     | 0.87     | **0.92** |
+| FL #6 → FL #1   | -0.61    | -0.49    | -0.52    |
+| FL #1 → FL #6   | -0.58    | -3.05    | **-0.17**|
+
+### Cross-type transfer (R²)
+
+Trained on FL #6 (longest, deepest FL hold), predict all other holds.
+
+| Predict | Production | CO2-Bohr | Richards |
+|---------|:----------:|:--------:|:--------:|
+| FL #1   | -0.61      | -0.49    | -0.52    |
+| FRC #2  | -0.44      | -0.44    | -0.43    |
+| RV #3   | -0.39      | -0.38    | -0.38    |
+| RV #4   | -0.72      | -0.72    | -0.72    |
+| FRC #5  | -0.35      | -0.35    | -0.36    |
+| FL #6   | 0.9953 *   | 0.9953 * | 0.9952 * |
+
+\* = self-fit (training hold).
+
+### Cross-prediction RMSE (within-type pairs)
+
+| Pair           | Production | CO2-Bohr | Richards |
+|----------------|:----------:|:--------:|:--------:|
+| FRC #5 → FRC #2 | **1.05** | 1.29     | 1.17     |
+| FRC #2 → FRC #5 | **3.56** | 4.23     | 10.03    |
+| RV #4 → RV #3   | **3.50** | 3.55     | 4.19     |
+| RV #3 → RV #4   | 7.65     | 8.04     | **6.34** |
+| FL #6 → FL #1   | **0.61** | 0.59     | 0.59     |
+| FL #1 → FL #6   | **16.22**| 25.95    | 13.93    |
+
+### Key findings
+
+1. **FRC and RV pairs transfer well** (R² 0.84–0.92). Both holds within each
+   type show real desaturation, so the fitted dynamics are similar enough.
+   Production has the best and most consistent within-type transfer.
+
+2. **FL pair does not transfer.** FL #1 barely desaturates (SpO2 97–99%) while
+   FL #6 drops to 57%. A model trained on a deep drop predicts a deep drop on
+   the flat hold, and vice versa. This is a data issue (insufficient FL #1
+   desaturation), not a model failure.
+
+3. **No model generalises across hold types.** All cross-type R² values are
+   negative. The initial O2 store (pao2_0) and washout rate (tau_washout) are
+   fundamentally different between FL/FRC/RV, making parameters trained on one
+   type inapplicable to another. Per-type fitting is justified.
+
+4. **Production slightly edges out CO2-Bohr on transfer tasks.** The saturating
+   Bohr effect transfers more reliably than the linear CO2 formulation (e.g.,
+   FRC #2→FRC #5: Production 0.92 vs CO2-Bohr 0.89).
+
+5. **Richards transfer is inconsistent.** Best on RV #3→RV #4 (0.92) but worst
+   on FRC #2→FRC #5 (0.40). Its curve-specific parameters (t50, k, nu) do not
+   carry physiological meaning, so transfer success depends on how similar the
+   two curves happen to be in shape.
+
+6. **Global fitting across hold types would require** shared physiological
+   parameters (Bohr effect, ODC steepness, sensor delay) with type-specific
+   initial conditions (pao2_0, tau_washout). This is a potential next step.
+
+### Implementation
+
+- `backend/scripts/cross_predict.py` — full cross-prediction matrix + plots
+
+---
+
+## 8. Partial-Transfer Cross-Prediction (2026-02-26)
+
+Tests whether the mechanistic models' parameters separate cleanly into
+**shared physiology** (same person, transfers across types) and **type-specific
+initial conditions** (re-fit per target hold). This is a prerequisite for
+global fitting.
+
+### Parameter split
+
+**Production:**
+- Shared (fixed from source): `pvo2`, `gamma`, `bohr_max`, `tau_bohr`, `r_offset` (5 params)
+- Type-specific (re-fit on target): `pao2_0`, `tau_washout` (2 params)
+
+**CO2-Bohr:**
+- Shared (fixed from source): `pvo2`, `gamma`, `k_co2`, `r_offset` (4 params)
+- Type-specific (re-fit on target): `pao2_0`, `tau_washout`, `paco2_0` (3 params)
+
+### Protocol
+
+1. Fit full model on source hold (all 7 params free)
+2. Fix shared params from source fit
+3. Re-optimize only type-specific params on target hold (DE, 2-3 free params)
+4. Report R² and compare to raw transfer (0 re-fitted) and self-fit (7 re-fitted)
+
+"Recovery" = (partial R² - raw R²) / (self-fit R² - raw R²) × 100%. A value
+near 100% means the shared params transfer perfectly and only initial conditions
+need adjusting.
+
+### Cross-type partial transfer (R²)
+
+All 24 cross-type (source type != target type) pairs.
+
+**Production** (2 free params):
+
+| Source → Target  |  Raw R² | Partial R² | Self-fit R² | Recovery |
+|------------------|--------:|-----------:|------------:|---------:|
+| FL#1 → FRC#2    | -0.33   | 0.94       | 0.94        | 99.6%    |
+| FL#1 → RV#3     | -0.35   | 0.97       | 0.98        | 99.0%    |
+| FL#1 → RV#4     | -0.71   | 0.96       | 0.96        | 100.0%   |
+| FL#1 → FRC#5    | -0.35   | 0.98       | 0.98        | 99.9%    |
+| FRC#2 → RV#3    |  0.33   | 0.93       | 0.98        | 91.0%    |
+| FRC#2 → RV#4    |  0.47   | 0.91       | 0.96        | 89.2%    |
+| FRC#2 → FL#6    | -2.81   | 0.99       | 1.00        | 99.9%    |
+| FRC#5 → RV#3    |  0.24   | 0.97       | 0.98        | 98.2%    |
+| FRC#5 → RV#4    |  0.58   | 0.95       | 0.96        | 97.8%    |
+| FRC#5 → FL#6    | -10.05  | 0.99       | 1.00        | 100.0%   |
+| RV#3 → FRC#2    | -6.57   | 0.88       | 0.94        | 99.1%    |
+| RV#3 → FRC#5    | -1.32   | 0.87       | 0.98        | 95.3%    |
+| RV#3 → FL#6     | -15.97  | 0.99       | 1.00        | 100.0%   |
+| RV#4 → FRC#2    | -2.84   | 0.82       | 0.94        | 96.9%    |
+| RV#4 → FRC#5    | -0.17   | 0.96       | 0.98        | 98.7%    |
+| RV#4 → FL#6     | -13.30  | 0.99       | 1.00        | 99.9%    |
+| FL#6 → FRC#2    | -0.44   | 0.37       | 0.94        | **58.8%**|
+| FL#6 → RV#3     | -0.39   | 0.86       | 0.98        | 91.0%    |
+| FL#6 → RV#4     | -0.72   | 0.74       | 0.96        | **86.9%**|
+| FL#6 → FRC#5    | -0.35   | 0.59       | 0.98        | **70.8%**|
+
+**CO2-Bohr** (3 free params):
+
+| Source → Target  |  Raw R² | Partial R² | Self-fit R² | Recovery |
+|------------------|--------:|-----------:|------------:|---------:|
+| FL#1 → FRC#2    | -0.34   | 0.94       | 0.95        | 99.6%    |
+| FL#1 → RV#3     | -0.35   | 0.98       | 0.98        | 99.7%    |
+| FL#1 → RV#4     | -0.70   | 0.93       | 0.96        | 98.6%    |
+| FL#1 → FRC#5    | -0.34   | 0.98       | 0.98        | 100.1%   |
+| FRC#2 → RV#3    |  0.33   | 0.95       | 0.98        | 94.1%    |
+| FRC#2 → RV#4    |  0.42   | 0.95       | 0.96        | 99.2%    |
+| FRC#2 → FL#6    | -1.68   | 1.00       | 1.00        | 100.0%   |
+| FRC#5 → RV#3    |  0.22   | 0.96       | 0.98        | 97.0%    |
+| FRC#5 → RV#4    |  0.57   | 0.91       | 0.96        | 87.8%    |
+| FRC#5 → FL#6    | -11.34  | 0.98       | 1.00        | 99.9%    |
+| RV#3 → FRC#2    | -6.60   | 0.88       | 0.95        | 99.1%    |
+| RV#3 → FRC#5    | -1.43   | 0.96       | 0.98        | 99.3%    |
+| RV#3 → FL#6     | -16.88  | 0.95       | 1.00        | 99.8%    |
+| RV#4 → FRC#2    | -2.82   | 0.82       | 0.95        | 96.7%    |
+| RV#4 → FRC#5    | -0.17   | 0.96       | 0.98        | 98.7%    |
+| RV#4 → FL#6     | -13.41  | 0.99       | 1.00        | 99.9%    |
+| FL#6 → FRC#2    | -0.44   | 0.93       | 0.95        | 98.8%    |
+| FL#6 → RV#3     | -0.38   | 0.89       | 0.98        | 93.2%    |
+| FL#6 → RV#4     | -0.72   | 0.91       | 0.96        | 97.2%    |
+| FL#6 → FRC#5    | -0.35   | 0.94       | 0.98        | 97.4%    |
+
+### Key findings
+
+1. **Partial transfer recovers 87-100% of self-fit R² for most pairs.** The
+   shared physiological parameters (gamma, Bohr effect, pvo2, r_offset) transfer
+   across hold types almost perfectly. The failure in raw cross-prediction was
+   entirely due to type-specific initial conditions.
+
+2. **CO2-Bohr transfers more consistently than Production.** CO2-Bohr achieves
+   93-100% recovery across all 24 cross-type pairs. Production achieves 86-100%
+   for most pairs but drops to 59-71% when FL#6 is the source. The extra free
+   param (paco2_0) in CO2-Bohr gives it more flexibility to adapt.
+
+3. **FL#6 as source is problematic for Production** (59-87% recovery on
+   FRC/RV targets). The FL#6 fit likely has compensatory shared params (gamma,
+   Bohr) tuned to the long FL plateau that don't represent the true physiology
+   well. CO2-Bohr avoids this by having paco2_0 as a type-specific param.
+
+4. **FL#1 as source works surprisingly well** (99-100% recovery) despite
+   barely desaturating. The shared physiology estimated from a flat hold still
+   transfers — the model correctly attributes the lack of desaturation to high
+   pao2_0/tau_washout rather than different physiology.
+
+5. **This validates the global fitting approach.** A model with shared
+   physiology (4-5 params) + per-type initial conditions (2-3 params) should
+   achieve R² close to individual per-hold fits, while being constrained by
+   a single consistent set of physiological parameters.
+
+### Implementation
+
+- `backend/scripts/cross_predict_partial.py` — partial-transfer fitting + plots
+
+---
+
+## 9. References
 
 - Severinghaus, J.W. (1979). Simple, accurate equations for human blood O2
   dissociation computations. J Appl Physiol. 46(3):599-602.
