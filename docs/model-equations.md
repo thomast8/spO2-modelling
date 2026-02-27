@@ -3,7 +3,10 @@
 Three models are retained for validation on future data. Two are mechanistic
 (Production, CO2-Bohr) and one is a descriptive benchmark (Richards).
 
-Last updated: 2026-02-26
+v4 tested adding a sensor delay observation layer and censored loss to CO2-Bohr.
+The delay did not improve fit quality — see Section 10.
+
+Last updated: 2026-02-27
 
 ---
 
@@ -512,6 +515,147 @@ All 24 cross-type (source type != target type) pairs.
 ### Implementation
 
 - `backend/scripts/cross_predict_partial.py` — partial-transfer fitting + plots
+
+---
+
+## 10. v4 Experiment: Sensor Delay + Censored Loss (2026-02-27)
+
+### Hypothesis
+
+v3 showed gamma pinning at upper bound (2.0) and 3-5/7 params at bounds.
+The hypothesis was that physiology params compensate for a missing sensor
+delay (circulation lag from lung to finger pulse oximeter, ~10-25s empirically).
+Adding a pure time delay should free gamma and reduce params-at-bounds.
+
+### CO2-Bohr+Delay (8 params)
+
+Identical physiology to CO2-Bohr, with a pure delay observation layer:
+
+    SaO2(t)        = [CO2-Bohr physiology, identical equations]
+    SaO2_delayed(t) = interp(t - d, t, SaO2, left=SaO2[0])
+    SpO2(t)        = clip(SaO2_delayed + r_offset, 0, 100)
+
+New parameter: `d` in (3, 30) seconds. Gamma bounds narrowed to (0.8, 1.5).
+
+### Censored Loss
+
+Alternative loss function that treats SpO2 = 40% readings as left-censored
+(device floor):
+
+    L = -sum_i  log p(y_i | y_hat_i)
+    p(y_i | y_hat_i) = N(y_i; y_hat_i, sigma)    if y_i > 40
+    p(y_i | y_hat_i) = Phi(40; y_hat_i, sigma)    if y_i <= 40
+
+where sigma = 1.5 (fixed), Phi is the normal CDF.
+
+### Variants tested
+
+| Variant              | Params | Observation       | Loss           | Gamma bounds |
+|----------------------|--------|-------------------|----------------|-------------|
+| CO2-Bohr             | 7      | r_offset only     | Weighted SSE   | 0.8-2.0     |
+| CO2-Bohr+Delay       | 8      | pure delay + clip | Weighted SSE   | 0.8-1.5     |
+| CO2-Bohr+Delay+Cens  | 8      | pure delay + clip | Censored NLL   | 0.8-1.5     |
+| Richards             | 5      | None              | Unweighted SSE | N/A         |
+
+### Per-hold results (R²)
+
+| Hold    | CO2-Bohr (7p) | CO2-B+Delay (8p) | CO2-B+D+Cens (8p) | Richards (5p) |
+|---------|:-------------:|:-----------------:|:------------------:|:-------------:|
+| FL #1   | 0.7394        | 0.7231            | 0.7231             | **0.7644**    |
+| FL #6   | **0.9953**    | 0.9953            | **0.9955**         | 0.9952        |
+| FRC #2  | 0.9487        | 0.9493            | 0.9565             | **0.9925**    |
+| FRC #5  | 0.9758        | 0.9767            | 0.9779             | **0.9833**    |
+| RV #3   | 0.9837        | 0.9836            | 0.9845             | **0.9876**    |
+| RV #4   | 0.9587        | 0.9585            | 0.9521             | **0.9710**    |
+
+### Params at bounds
+
+| Hold    | CO2-Bohr | CO2-B+Delay | CO2-B+D+Cens | Richards |
+|---------|:--------:|:-----------:|:------------:|:--------:|
+| FL #1   | 4/7      | 5/8         | 5/8          | 2/5      |
+| FL #6   | 3/7      | 4/8         | 4/8          | 1/5      |
+| FRC #2  | 4/7      | 5/8         | 5/8          | 1/5      |
+| FRC #5  | 4/7      | 5/8         | 5/8          | 2/5      |
+| RV #3   | 4/7      | 6/8         | 4/8          | 2/5      |
+| RV #4   | 3/7      | 4/8         | 5/8          | 1/5      |
+
+### Delay values (per-hold fits)
+
+| Hold    | d (s)  | Notes               |
+|---------|-------:|---------------------|
+| FL #1   | 30.0   | At upper bound      |
+| FL #6   | 30.0   | At upper bound      |
+| FRC #2  | 30.0   | At upper bound      |
+| FRC #5  | 30.0   | At upper bound      |
+| RV #3   | 26.4   | Interior            |
+| RV #4   | 30.0   | At upper bound      |
+
+Empirical delay (end-of-apnea to SpO2 nadir): 9-34s, median 22s.
+
+### Global fit (14p vs 13p)
+
+CO2-Bohr+Delay global fit: 5 shared + 3x3 type-specific = 14 params.
+CO2-Bohr global fit: 4 shared + 3x3 type-specific = 13 params.
+
+| Metric                  | Global CO2-Bohr (13p) | Global CO2-B+Delay (14p) |
+|-------------------------|:---------------------:|:------------------------:|
+| Avg R² (fitted holds)   | 0.9602                | 0.9606                   |
+| Params at bounds        | 5/13                  | 5/14                     |
+| gamma                   | 1.76                  | 1.44                     |
+| k_co2                   | 0.020 (at bound)      | 0.028                    |
+| pvo2                    | 15.6                  | 15.0 (at bound)          |
+| d                       | N/A                   | 30.0 (at bound)          |
+
+### Key findings
+
+1. **Delay d pins at upper bound (30s) in 5/6 per-hold fits and the global
+   fit.** The model uses delay as another compensation parameter, not as a
+   faithful sensor model. Delay and tau_washout are confounded.
+
+2. **Gamma moved from 2.0 → 1.5 (per-hold) / 1.76 → 1.44 (global).** The
+   narrower gamma bound forces the optimizer off the ceiling, but gamma still
+   pushes to whatever ceiling is set. It's not converging to a physiological
+   value — it's just hitting the new, lower wall.
+
+3. **Adding delay increases params-at-bounds** (4-6/8 vs 3-4/7). The extra
+   parameter creates more identifiability problems rather than resolving them.
+
+4. **R² is essentially unchanged.** +Delay: ±0.001 vs CO2-Bohr on all holds.
+
+5. **Censored loss doesn't help.** CO2-Bohr+Delay+Cens degrades FRC#2 drop
+   R² (0.65 vs 0.81) and RV#4 overall (0.952 vs 0.959). Only improves FL#6
+   marginally.
+
+6. **Per-hold shared-param consistency is poor with delay.** pvo2 ranges
+   15-45, r_offset ranges -2.9 to +3.0 across per-hold fits. The delay
+   doesn't stabilise these.
+
+7. **k_co2 didn't collapse in the global +Delay fit** (0.028 vs 0.020 at
+   bound without delay). This is a minor improvement.
+
+8. **Partial transfer still works well.** Both models recover 93-100% of
+   self-fit R² with partial transfer, confirming the shared/type-specific
+   split is sound regardless of delay.
+
+### Conclusion
+
+The sensor delay hypothesis was not supported. The delay parameter is
+confounded with tau_washout and gets absorbed as another compensation
+mechanism. The underlying issue is not missing delay but rather that the
+7-parameter mechanistic structure cannot match the flexibility of the
+5-parameter Richards sigmoid. Possible next steps:
+
+- Constrain d from external measurement rather than fitting it
+- Try a different observation model (e.g., IIR filter instead of pure delay)
+- Accept that the current physiology model has ~0.96 R² ceiling and focus
+  on interpretability rather than chasing Richards' 0.98
+
+### Implementation
+
+- `backend/scripts/compare_v4_model.py` — per-hold 4-way comparison
+- `backend/scripts/cross_predict_v4.py` — cross-prediction matrix
+- `backend/scripts/cross_predict_partial_v4.py` — partial transfer
+- `backend/scripts/global_fit_v4.py` — joint fit (13p vs 14p)
 
 ---
 
