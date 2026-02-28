@@ -6,7 +6,11 @@ Three models are retained for validation on future data. Two are mechanistic
 v4 tested adding a sensor delay observation layer and censored loss to CO2-Bohr.
 The delay did not improve fit quality — see Section 10.
 
-Last updated: 2026-02-27
+v5 tested richer sensor observation models (IIR filter, delay+filter, recovery
+phase, beat-based HR-coupled sensor). None improved fits on apnea-only data —
+see Section 11.
+
+Last updated: 2026-02-28
 
 ---
 
@@ -656,6 +660,122 @@ mechanism. The underlying issue is not missing delay but rather that the
 - `backend/scripts/cross_predict_v4.py` — cross-prediction matrix
 - `backend/scripts/cross_predict_partial_v4.py` — partial transfer
 - `backend/scripts/global_fit_v4.py` — joint fit (13p vs 14p)
+
+---
+
+## 11. v5 Experiments: Sensor Observation Models (2026-02-28)
+
+### Motivation
+
+v4 showed pure time delay is structurally unidentifiable with exponential PAO2
+washout: `delay` just rescales the amplitude via `exp(d/tau)` and gets absorbed
+by `pao2_0`. Expert analysis suggested two fixes: (1) an IIR low-pass filter
+changes the **shape** of the curve (rounds the ODC knee), which delay alone
+cannot, and (2) fitting the **recovery phase** after breathing resumes breaks
+the exponential symmetry entirely.
+
+### Experiment 1: IIR Filter Only (8p)
+
+CO2-Bohr physiology + IIR low-pass filter (no delay):
+
+    alpha = dt / (tau_f + dt)
+    SpO2[i] = (1 - alpha) * SpO2[i-1] + alpha * SaO2[i]
+
+New param: `tau_f` in (1, 20) seconds.
+
+**Result:** tau_f pins at lower bound (1.0s) in all 6 holds. R² is **worse**
+than baseline CO2-Bohr in 5/6 holds. gamma remains at 2.0. The filter adds
+unwanted smoothing without absorbing any shape compensation.
+
+### Experiment 2: Delay + Filter (9p)
+
+CO2-Bohr + delay `d` + filter `tau_f`:
+
+    SaO2_delayed(t) = interp(t - d, t, SaO2, left=SaO2[0])
+    SpO2 = IIR_filter(SaO2_delayed)
+
+**Result:** tau_f pins at 1.0 in all holds. `d` is erratic (3-30s). On
+apnea-only data, both delay and filter are structurally unidentifiable.
+
+### Experiment 3: Recovery Phase (9p)
+
+Includes 30-90s of data after breathing resumes. Piecewise PAO2 model:
+
+    PAO2(t) = pvo2 + (pao2_0 - pvo2) * exp(-t/tau)   for t <= t_end (apnea)
+    PAO2(t) = 100.0                                    for t > t_end (recovery)
+
+The V-shaped SpO2 nadir during recovery (SpO2 keeps falling for 10-30s after
+first breath, then rises) should directly constrain delay + filter.
+
+**Result:** Mixed. tau_f moved off lower bound in 3/6 holds (6.4, 6.8, 15.3s)
+— recovery data **does** inform the filter. But `d` still pins at 30 in 5/6
+holds. R² on recovery is severely negative (-4 to -22) — the instantaneous
+PAO2 jump model is too aggressive. The actual recovery is more gradual (alveolar
+re-oxygenation takes multiple breaths).
+
+### Experiment 4: Global Fit with Filter (14p)
+
+Took the "d still confounded" path: fixed d=0, fitted tau_f as shared param.
+Gamma sweep: free (0.8-2.5), narrow (0.9-1.3), fixed (1.0).
+
+**Result:** Filter **hurts** global fit — R² avg 0.61 vs 0.96 baseline.
+tau_f pins at 1.0, r_offset compensates at +3 (bound). gamma drops from
+1.76 to 1.23 with filter (partial absorption), but at catastrophic R² cost.
+
+### Experiment 5: HR-Coupled Beat-Based Sensor (9p)
+
+Time-varying delay and filter based on heartbeat counts:
+
+    d(t) = B_delay * 60 / HR(t)      # delay in seconds, HR-dependent
+    tau_f(t) = B_avg * 60 / HR(t)    # filter time constant, HR-dependent
+
+Per-sample loop with time-varying IIR filter. B_delay in (5, 25) beats,
+B_avg in (3, 15) beats.
+
+**Result:** Slight R² improvements in 4/6 holds (best: RV#3 +0.006). But
+B_delay pins at bounds (25 hi in 4/6, 5 lo in 2/6) — same confounding as
+constant delay. B_avg pins at bounds in 5/6 holds. gamma still 1.3-2.0.
+The beat-based sensor is marginally better than constant delay+filter but
+does not solve identifiability.
+
+### Summary
+
+| Experiment | Key param behaviour | R² vs baseline | Verdict |
+|-----------|---------------------|----------------|---------|
+| Filter only (8p) | tau_f=1.0 (all holds) | Worse | No benefit |
+| Delay+Filter (9p) | tau_f=1.0, d erratic | No change | Unidentifiable |
+| Recovery (9p) | tau_f off bound in 3/6 | Recovery R² negative | Promising but model too simple |
+| Global+Filter (14p) | tau_f=1.0, r_offset=+3 | 0.61 vs 0.96 | Catastrophic |
+| Beat-Sensor (9p) | B_delay/B_avg at bounds | +0.006 best | Marginal, still confounded |
+
+### Conclusions
+
+1. **On apnea-only data, sensor models are structurally unidentifiable.** The
+   exponential PAO2 decay creates a confounding: any delay/filter effect can
+   be absorbed by rescaling `pao2_0` and `tau_washout`.
+
+2. **Recovery data partially breaks the confounding** (Exp 3 showed tau_f
+   moving to interior values), but the step PAO2 recovery model is too
+   aggressive. A more gradual re-oxygenation model (exponential rise with
+   its own time constant) might work better.
+
+3. **Gamma persistently wants to be 1.5-2.0.** No sensor model tested can
+   absorb gamma's shape compensation without destroying overall fit. gamma > 1
+   may reflect real physiology (steep ODC at low PO2) or compensate for model
+   misspecification elsewhere.
+
+4. **The current CO2-Bohr model at R² ~0.96 (global) is near the ceiling**
+   achievable without external measurement (ETCO2, multi-site pulse oximetry).
+   The Richards sigmoid ceiling (R² ~0.98) requires shape flexibility that the
+   current mechanistic structure cannot provide.
+
+### Implementation
+
+- `backend/scripts/exp_v5_01_filter_only.py` — Exp 1
+- `backend/scripts/exp_v5_02_delay_filter.py` — Exp 2
+- `backend/scripts/exp_v5_03_recovery.py` — Exp 3
+- `backend/scripts/exp_v5_04_global_sensor.py` — Exp 4
+- `backend/scripts/exp_v5_05_beat_sensor.py` — Exp 5
 
 ---
 
