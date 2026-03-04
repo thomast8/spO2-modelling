@@ -1,0 +1,439 @@
+================================================================================
+v6 EXPERIMENT 1: Global Recovery Fit — Exponential Re-oxygenation + Sensor
+================================================================================
+Date: 2026-03-02
+Script: backend/scripts/exp_v6_01_global_recovery.py
+
+HYPOTHESIS
+----------
+Including recovery data with a realistic exponential (not step) re-oxygenation
+model, combined with global/shared sensor parameters across all holds, should
+break the pao2_0 <-> delay confounding and make d and tau_f identifiable.
+
+The V-shaped nadir (SpO2 keeps falling after breathing resumes, then recovers)
+creates an asymmetric feature that a pure shift of initial conditions cannot
+replicate.
+
+DATA
+----
+6 holds from session 1, FL#1 excluded from fitting (only 2% SpO2 variation).
+
+  FL#1  [EXCLUDED]: 178 apnea + 5 recovery pts (t_end=179s, recovery SpO2 97-97%)
+  FRC#2:             132 apnea + 48 recovery pts (t_end=134s, recovery SpO2 78-94%)
+  RV#3:              126 apnea + 49 recovery pts (t_end=129s, recovery SpO2 52-96%)
+  RV#4:              192 apnea + 56 recovery pts (t_end=193s, recovery SpO2 59-91%)
+  FRC#5:             185 apnea + 60 recovery pts (t_end=187s, recovery SpO2 41-96%)
+  FL#6:              366 apnea + 38 recovery pts (t_end=372s, recovery SpO2 52-89%)
+
+MODEL
+-----
+Physiology (piecewise):
+  PAO2(t) = pvo2 + (pao2_0 - pvo2) * exp(-t/tau_washout)                          for t <= t_end
+  PAO2(t) = 100 - (100 - PAO2(t_end)) * exp(-(t-t_end)/tau_reoxy)                 for t > t_end
+  PaCO2(t) = paco2_0 + k_co2 * t                                                   for t <= t_end
+  PaCO2(t) = 40 + (PaCO2(t_end) - 40) * exp(-(t-t_end)/tau_clear)                 for t > t_end
+  tau_clear fixed at 30s.
+
+ODC: Severinghaus + gamma + Bohr P50 shift (same as v4/v5).
+Sensor: delay d + preconditioned IIR filter tau_f (shared across all holds).
+
+VARIANTS
+--------
+  A: CO2-Bohr (global, apnea only)      — 13 params (4 shared + 3x3 type-specific)
+  B: CO2-Bohr+Recovery (no sensor)       — 14 params (5 shared + 3x3 type-specific)
+  C: CO2-Bohr+Recovery+Sensor (d+tau_f)  — 16 params (7 shared + 3x3 type-specific)  [main]
+  D: Same as C but gamma fixed at 1.0    — 16 params
+
+Optimizer: scipy differential_evolution, maxiter=6000, popsize=60, tol=1e-10.
+Loss: weighted SSE with weight=3 below SpO2=95%.
+
+
+================================================================================
+VARIANT A: CO2-Bohr (global, apnea only) — BASELINE
+================================================================================
+Converged: True, fun=17106.95, nfev=1,248,822
+
+Shared parameters:
+     pvo2 =  15.61  [15, 50]
+    gamma =   1.76  [0.8, 2.5]
+    k_co2 =   0.02  [0.02, 0.25]  ** AT BOUND **
+  r_offset = -0.59  [-3, 3]
+
+Per-hold R²:
+  FL#1  (excl): R²_full=0.4743, R²_apnea=0.2865
+  FRC#2:        R²_full=0.1407, R²_apnea=0.9365
+  RV#3:         R²_full=0.6472, R²_apnea=0.9351
+  RV#4:         R²_full=0.0797, R²_apnea=0.9580
+  FRC#5:        R²_full=0.6623, R²_apnea=0.9767
+  FL#6:         R²_full=0.9452, R²_apnea=0.9950
+  Avg (fitted): R²_full=0.4950, R²_apnea=0.9602
+
+Identifiability: 5/13 at bounds
+  k_co2=lo, FL/pao2_0=lo, FRC/pao2_0=hi, FRC/tau_washout=hi, RV/paco2_0=lo
+
+Notes:
+  - R²_full is low because variant A predicts only apnea; the "full" trace
+    includes recovery points where the model continues to decay rather than
+    recover. This is expected.
+  - R²_apnea avg=0.9602 matches v4 global baseline.
+  - gamma=1.76 is the known inflated value from prior experiments.
+
+
+================================================================================
+VARIANT B: CO2-Bohr+Recovery (no sensor) — RECOVERY WITHOUT SENSOR
+================================================================================
+Converged: True, fun=479,081.94, nfev=2,841,765
+
+Shared parameters:
+     pvo2 =  15.00  [15, 50]    ** AT BOUND **
+    gamma =   0.80  [0.8, 2.5]  ** AT BOUND **
+    k_co2 =   0.05  [0.02, 0.25]
+  r_offset = -3.00  [-3, 3]     ** AT BOUND **
+  tau_reoxy = 60.00  [3, 60]    ** AT BOUND **
+
+Per-hold R²:
+  FL#1  (excl): R²_full=-36.77, R²_apnea=-48.05, R²_rec=0.00
+  FRC#2:        R²_full=0.10,   R²_apnea=-2.62,  R²_rec=-0.77
+  RV#3:         R²_full=0.35,   R²_apnea=0.01,   R²_rec=-2.55
+  RV#4:         R²_full=0.66,   R²_apnea=0.80,   R²_rec=-5.61
+  FRC#5:        R²_full=0.34,   R²_apnea=0.68,   R²_rec=-3.61
+  FL#6:         R²_full=0.78,   R²_apnea=0.91,   R²_rec=-6.33
+  Avg (fitted): R²_full=0.4443, R²_apnea=-0.04,  R²_rec=-3.77
+
+Identifiability: 11/14 at bounds — CATASTROPHIC
+
+Notes:
+  - COMPLETE FAILURE. The bare physiology model cannot fit recovery data.
+  - tau_reoxy pinned at upper bound (60s), trying to make recovery as slow as
+    possible, yet the model still predicts recovery that's too steep or wrong
+    shape compared to observed.
+  - gamma collapsed to lower bound (0.8) — the optimizer is distorting all
+    physiology params trying to compromise between apnea and recovery fits.
+  - R²_apnea degraded from 0.96 to -0.04 — adding recovery data without a
+    sensor model destroys the apnea fit entirely.
+  - This proves that recovery dynamics require the sensor observation model
+    (delay + filter) to produce the correct timing of the SpO2 nadir.
+
+
+================================================================================
+VARIANT C: CO2-Bohr+Recovery+Sensor (d + tau_f) — MAIN EXPERIMENT
+================================================================================
+Converged: True, fun=97,249.50, nfev=1,754,931
+
+Shared parameters:
+     pvo2 =  23.57  [15, 50]
+    gamma =   2.06  [0.8, 2.5]
+    k_co2 =   0.02  [0.02, 0.25]  ** AT BOUND **
+  r_offset = -1.50  [-3, 3]
+  tau_reoxy = 60.00  [3, 60]      ** AT BOUND **
+        d =  29.96  [1, 30]       (effectively at bound)
+    tau_f =  15.65  [1, 30]       INTERIOR
+
+Per-hold R²:
+  FL#1  (excl): R²_full=0.17,  R²_apnea=-0.10,  R²_rec=0.00
+  FRC#2:        R²_full=0.82,  R²_apnea=0.81,   R²_rec=-8.40
+  RV#3:         R²_full=0.94,  R²_apnea=0.97,   R²_rec=0.66
+  RV#4:         R²_full=0.80,  R²_apnea=0.88,   R²_rec=-1.56
+  FRC#5:        R²_full=0.96,  R²_apnea=0.97,   R²_rec=0.53
+  FL#6:         R²_full=0.98,  R²_apnea=0.99,   R²_rec=0.33
+  Avg (fitted): R²_full=0.8993, R²_apnea=0.9227, R²_rec=-1.6886
+
+Identifiability: 5/16 at bounds
+  k_co2=lo, tau_reoxy=hi, FRC/paco2_0=hi, RV/pao2_0=hi, RV/paco2_0=lo
+
+Type-specific params:
+  FL#6:  pao2_0=187.79, tau_washout=73.31, paco2_0=27.21  (all interior)
+  FRC#2: pao2_0=127.51, tau_washout=62.95, paco2_0=50.00* (paco2_0=hi)
+  FRC#5: pao2_0=127.51, tau_washout=62.95, paco2_0=50.00* (paco2_0=hi)
+  RV#3:  pao2_0=110.00*, tau_washout=22.45, paco2_0=30.00* (pao2_0=hi, paco2_0=lo)
+  RV#4:  pao2_0=110.00*, tau_washout=22.45, paco2_0=30.00* (pao2_0=hi, paco2_0=lo)
+
+Notes:
+  - d=29.96 is effectively at the upper bound (30s). The profile likelihood
+    confirms this: loss is monotonically decreasing with d (see below).
+    The confounding PERSISTS.
+  - tau_f=15.65 is genuinely at interior — this is the one success.
+    The IIR filter is identifiable thanks to the recovery data smoothing
+    the sharp transitions.
+  - tau_reoxy=60 pinned at upper bound — the exponential recovery model wants
+    to be as slow as possible. This suggests the single-exponential is too
+    simple; real re-oxygenation is faster initially then slows.
+  - gamma INCREASED from 1.76 (variant A) to 2.06 — moving away from 1.0,
+    not toward it. The sensor model is not absorbing gamma as hoped.
+  - Recovery R² is mixed: good for RV#3 (+0.66) and FRC#5 (+0.53), terrible
+    for FRC#2 (-8.40). The model fits the deepest desaturations better.
+  - Apnea R² dropped from 0.96 to 0.92 — adding recovery data slightly
+    degrades apnea fit as the optimizer compromises.
+
+
+================================================================================
+VARIANT D: CO2-Bohr+Recovery+Sensor (gamma=1.0) — GAMMA FIXED
+================================================================================
+Converged: True, fun=120,042.50, nfev=2,656,371
+
+Shared parameters:
+     pvo2 =  21.46  [15, 50]
+    gamma =   1.01  [0.99, 1.01]  ** AT BOUND ** (by design)
+    k_co2 =   0.02  [0.02, 0.25]  ** AT BOUND **
+  r_offset =  3.00  [-3, 3]       ** AT BOUND **
+  tau_reoxy = 28.07  [3, 60]      INTERIOR
+        d =  30.00  [1, 30]       ** AT BOUND **
+    tau_f =  19.37  [1, 30]       INTERIOR
+
+Per-hold R²:
+  FL#1  (excl): R²_full=-4.73, R²_apnea=-6.28, R²_rec=0.00
+  FRC#2:        R²_full=0.64,  R²_apnea=0.83,  R²_rec=-9.48
+  RV#3:         R²_full=0.92,  R²_apnea=0.94,  R²_rec=0.64
+  RV#4:         R²_full=0.80,  R²_apnea=0.89,  R²_rec=-1.40
+  FRC#5:        R²_full=0.92,  R²_apnea=0.95,  R²_rec=0.55
+  FL#6:         R²_full=0.98,  R²_apnea=0.99,  R²_rec=0.28
+  Avg (fitted): R²_full=0.8499, R²_apnea=0.9207, R²_rec=-1.8842
+
+Identifiability: 9/16 at bounds — SIGNIFICANTLY WORSE
+
+Notes:
+  - Fixing gamma=1.0 costs ~5% R²_full (0.90 → 0.85) and causes widespread
+    bound-hitting (9 vs 5 for variant C).
+  - r_offset pinned at +3.0 (upper bound) — the model needs a large positive
+    offset to compensate for gamma=1.0, since the Severinghaus ODC with
+    gamma=1.0 systematically underpredicts SpO2 in the steep region.
+  - d still pinned at 30 — same confounding.
+  - tau_reoxy=28.1 is now interior (vs 60 in C) — interesting! With gamma
+    fixed, the optimizer can't use gamma to slow the recovery, so tau_reoxy
+    finds a more physiological value.
+  - tau_f=19.4 is interior, slightly higher than C's 15.7.
+  - FL#1 excluded hold is catastrophic (R²=-4.73), suggesting the global
+    params with gamma=1.0 are a very poor fit for low-variation holds.
+
+
+================================================================================
+PROFILE LIKELIHOOD FOR d (Variant C structure)
+================================================================================
+
+d (fixed)  |  Optimized loss (other params free)
+-----------+-------------------------------------
+     2.0   |  188,010.25
+     5.0   |  175,594.57
+     8.0   |  163,091.68
+    10.0   |  152,696.79
+    12.0   |  140,366.99
+    15.0   |  124,597.79
+    18.0   |  112,446.79
+    20.0   |  106,847.31
+    25.0   |   99,902.84
+    29.0   |   97,432.60
+
+Best d=29.0 (loss=97,432.60)
+Loss ratio max/min: 1.930
+
+INTERPRETATION: The profile likelihood is MONOTONICALLY DECREASING with d.
+There is NO local minimum — the loss surface wants d → ∞.
+This means d is NOT IDENTIFIABLE even with recovery data + global fit.
+
+The large d reduces loss because it allows the sensor model to create a longer
+"lag" that better matches the delayed recovery onset. But the same effect can
+be achieved by adjusting pao2_0 and tau_washout (the confounding manifold).
+
+
+================================================================================
+SUCCESS CRITERIA ASSESSMENT
+================================================================================
+
+  1. d and tau_f at interior values?
+     d=29.96: FAIL (effectively at upper bound, profile is monotonic)
+     tau_f=15.65: PASS (genuinely interior)
+
+  2. tau_reoxy physiologically plausible (5-30s)?
+     tau_reoxy=60.0: FAIL (pinned at upper bound)
+
+  3. R²(recovery) > 0 for all holds?
+     FAIL — avg=-1.69, only 3/5 fitted holds positive
+
+  4. R²(apnea) >= 0.95?
+     FAIL — avg=0.92, degraded from 0.96 baseline
+
+  5. gamma closer to 1.0?
+     FAIL — moved from 1.76 to 2.06 (further from 1.0)
+
+  6. Profile likelihood shows identifiable peak for d?
+     FAIL — monotonically decreasing, no peak
+
+Overall: 1/6 PASS, 5/6 FAIL
+
+
+================================================================================
+CONCLUSIONS
+================================================================================
+
+1. EXPONENTIAL RE-OXYGENATION IS INSUFFICIENT to break the d↔pao2_0 confound.
+   The single-exponential recovery model is too flexible — it can absorb the
+   delay effect by slowing down (tau_reoxy → ∞), leaving d unconstrained.
+
+2. VARIANT B PROVES SENSOR MODEL IS NECESSARY. The bare physiology model
+   completely fails on recovery data (R²=-3.77 avg), confirming that the
+   sensor observation chain (delay + filter) produces the characteristic
+   V-shaped nadir timing. Without it, the model predicts immediate SpO2
+   recovery at breathing onset, which doesn't match observations.
+
+3. TAU_F IS IDENTIFIABLE. The IIR filter time constant converges to interior
+   values (15.7s in C, 19.4s in D) across both variants. The recovery phase
+   does constrain the filter smoothing — the sharp transition at breathing
+   onset provides information about tau_f that the monotone apnea descent
+   cannot.
+
+4. GAMMA AND SENSOR REMAIN CONFOUNDED. Adding recovery data made gamma
+   worse (1.76 → 2.06), not better. The optimizer uses gamma to adjust the
+   ODC steepness to compensate for the inadequate recovery model.
+
+5. RECOVERY FIT IS HOLD-DEPENDENT. Deep desaturations (RV#3, FRC#5) fit
+   better than moderate ones (FRC#2, RV#4). This suggests the recovery
+   dynamics depend on desaturation depth in ways the model doesn't capture.
+
+NEXT STEPS (for v6.02+):
+  - Try a TWO-PHASE recovery model: fast initial phase + slow equilibration
+    (e.g., bi-exponential or ventilation-rate-dependent)
+  - Consider fixing d from physiological priors (e.g., d=10-15s) and only
+    fitting tau_f as the sensor parameter
+  - Try constraining gamma to narrow range (0.9-1.3) simultaneously with
+    sensor model, since the free gamma is absorbing too much variance
+  - Investigate whether the weighted SSE (3x below 95%) is biasing recovery
+    fits — recovery points often start well below 95%
+
+
+================================================================================
+EXPERT ANALYSIS
+================================================================================
+
+## 1) The "one physiology, different initial conditions" idea is validated
+
+The partial-transfer cross-prediction experiments (v4) are the strongest evidence:
+for most cross-type pairs, ~90-100% recovery of self-fit R² with only pao2_0,
+tau_washout (and paco2_0 for CO2-Bohr) refit. A shared parameter block exists.
+
+But this implies a constraint: "type-specific" initial conditions must actually
+be PER-HOLD, not per-type. Variant C forces FRC#2 and FRC#5 to share identical
+type-specific params, yet one has decent recovery fit and the other is
+catastrophic. Those two holds did not start from the same state.
+
+Actionable: move to a hierarchical initial-state model:
+  For hold i of type t:
+    pao2_0_i = mu_pao2[t] + delta_pao2_i,  delta ~ N(0, sigma)
+  similarly for tau_washout_i, paco2_0_i.
+
+This preserves "one model" while acknowledging reality: initial conditions
+vary every attempt.
+
+
+## 2) Why d stays pinned: structural, not just optimization
+
+The monotonically decreasing profile likelihood means there exists a manifold
+of near-equivalent solutions where increasing d can be compensated by tweaks
+to {pao2_0, tau_washout, tau_reoxy, gamma, ...}.
+
+The specific confound in v6: d vs "how long the physiology can keep falling
+after t_end." We tried to break this with V-shaped recovery, but tau_reoxy
+up to 60s (which it hits) lets the PHYSIOLOGY delay the rise, so d is still
+free to drift upward.
+
+If the scientific belief is "arterial oxygenation improves quickly once
+breathing resumes," then recovery physiology must not be allowed to mimic delay.
+Right now it is.
+
+
+## 3) Interpreting what v6 actually taught
+
+A) Variant B failing is expected and informative:
+   The data is screaming: "If you try to explain recovery with physiology
+   alone, I will destroy your physiology parameters." Finger SpO2 recovery
+   shape is dominated by transport + algorithmic smoothing + perfusion.
+
+B) tau_f being identifiable is a REAL WIN:
+   tau_f ~ 15-20s interior in C/D. The breath-resumption transition creates
+   a feature with enough curvature to constrain a low-pass time constant,
+   even if absolute delay is still ambiguous.
+
+C) gamma getting worse (1.76 -> 2.06) is a symptom of MODEL MISMATCH:
+   If adding sensor model were the missing piece, gamma should relax. Instead
+   it increased. This points to issues in:
+   - State dynamics mapping (hold type + time -> PaO2)
+   - CO2 dynamics / Bohr coupling (k_co2 keeps collapsing to lower bound)
+   - The observation model assumption (real oximeters don't behave like
+     "delay + 1-pole filter" under vasoconstriction/low perfusion)
+   - The premise that a single global d exists across all holds
+
+
+## 4) Recommended model changes (high leverage, minimal complexity creep)
+
+### Change 1: Structural coupling via alveolar gas equation
+Stop treating pao2_0 and paco2_0 as independent free knobs. At t=0:
+  PAO2_0 ~ FiO2*(PB - PH2O) - PaCO2_0/RQ
+This reduces DOF and makes it harder to fake delay via arbitrary initial states.
+
+### Change 2: Prevent tau_reoxy from impersonating delay
+Option A: Constrain tau_reoxy hard to [5, 15] or fix to ~10s.
+Option B: Remove tau_reoxy entirely; compute PAO2 during recovery from PaCO2
+clearance via alveolar gas equation. This automatically creates a two-phase
+recovery without an extra free exponential.
+
+### Change 3: Admit d is not identifiable from SpO2 alone
+Either:
+  - Treat d as a random effect (per-hold) with strong prior
+  - Make d a deterministic function of HR/perfusion
+  - Fix d to a physiologically plausible prior and stop trying to identify it
+
+The profile likelihood confirms: d is a nuisance parameter unless more data
+is added (multi-site SpO2, HR-based perfusion, etc.).
+
+### Change 4: Replace or regularize gamma
+Gamma is absorbing missing physiology. Better alternatives:
+  - Shunt fraction / venous admixture term (varies with hold type/lung volume)
+  - Effective A-a gradient dependent on lung volume
+  - At minimum: gamma ~ N(1.0, 0.1) as regularizer, not free compensator
+
+
+## 5) Recommended next experiments (v6.02+)
+
+### Exp A: Remove recovery's ability to mimic delay
+  - Constrain tau_reoxy hard to [5, 15] (or fix to 10)
+  - Keep sensor (d, tau_f) shared
+  - If V-shape hypothesis is correct, d should stop wanting -> infinity
+
+### Exp B: Per-hold initial conditions with shrinkage
+  - Shared physiology: {pvo2, k_co2, ...}
+  - Per-hold initial state: {pao2_0_i, paco2_0_i, tau_washout_i}
+  - Regularize per-hold states toward type means
+  - Will fix FRC#2 vs FRC#5 conflict
+
+### Exp C: Treat d as fixed, fit everything else
+  - Fit with d = 15, 20, 25, 30 fixed, compare:
+    - apnea R², recovery R²
+    - where gamma goes
+    - whether k_co2 stops collapsing
+  - If downstream physiology stable across d-band, stop spending complexity
+    budget trying to identify d from this dataset
+
+
+## 6) On blackout prediction (safety note)
+
+Finger SpO2 is delayed relative to arterial/cerebral oxygenation. Any
+model built here should be treated as research/analysis, not as a tool
+to decide how long to hold breath. Always apply real-world safety protocols.
+
+From a modeling standpoint, if blackout prediction is an application, the
+right latent variable is closer to cerebral O2 delivery / arterial O2
+content, not fingertip SpO2. This argues for a state-space formulation
+with uncertainty, and ideally additional sensors.
+
+
+## 7) Bottom line
+
+- YES: "one model across types" is achievable — partial-transfer results
+  demonstrate the necessary parameter separability.
+- NO: current data/model class will not uniquely identify d (and probably
+  not k_co2) from SpO2 alone. v6 shows why: recovery physiology (tau_reoxy)
+  is flexible enough to reintroduce the confound.
+- The path forward:
+  1. Make initial conditions per-hold (hierarchical)
+  2. Structurally couple O2 and CO2 (alveolar gas equation / RQ)
+  3. Prevent recovery dynamics from impersonating sensor delay
+  4. Treat d as fixed/regularized unless additional data is added

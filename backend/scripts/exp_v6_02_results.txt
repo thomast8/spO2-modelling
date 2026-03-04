@@ -1,0 +1,290 @@
+v6.02 RESULTS: Structural Fixes — Per-Hold ICs, AGEq Coupling, Constrained Recovery
+====================================================================================
+
+Date: 2026-03-02
+
+STRUCTURAL CHANGES APPLIED (all experiments):
+  1. Alveolar Gas Equation coupling: PAO2_0 = 149.2 - PaCO2/0.8 + delta_Aa
+     (replaces independent pao2_0 with physically-coupled derivation)
+  2. Gamma regularization: L2 penalty lambda=500 pulling gamma -> 1.0
+  3. tau_reoxy constrained to [5, 15] instead of [3, 60]
+
+DATA: 5 fitted holds (FL#6, FRC#2, FRC#5, RV#3, RV#4), FL#1 excluded
+
+=== EXP A: Type-specific ICs (16 params) ===
+
+Shared params:
+  pvo2      = 23.30    (interior)
+  gamma     = 2.33     (near upper bound 2.5 — regularization too weak)
+  k_co2     = 0.020    ** AT LOWER BOUND **
+  r_offset  = -1.42    (interior)
+  tau_reoxy = 15.00    ** AT UPPER BOUND **
+  d         = 30.00    ** AT UPPER BOUND **
+  tau_f     = 25.00    (interior)
+
+Type-specific ICs (all delta_Aa at +15 upper bound):
+  FL:  PAO2_0=129.7, tau_w=79.4, paco2_0=27.6
+  FRC: PAO2_0=101.7, tau_w=67.1, paco2_0=50.0 (at bound)
+  RV:  PAO2_0=126.7, tau_w=18.1, paco2_0=30.0 (at bound)
+
+Fit quality: R2(apnea) avg=0.933, R2(recovery) avg=-2.52 (very poor)
+
+=== EXP B: Per-hold ICs (22 params) ===
+
+Shared params:
+  pvo2      = 23.47    (interior)
+  gamma     = 2.17     (still far from 1.0)
+  k_co2     = 0.020    ** AT LOWER BOUND **
+  r_offset  = -1.32    (interior)
+  tau_reoxy = 15.00    ** AT UPPER BOUND **
+  d         = 30.00    ** AT UPPER BOUND **
+  tau_f     = 25.36    (interior)
+
+Per-hold ICs:
+  FRC#2: delta_Aa=+12.61, tau_w=69.1, paco2_0=48.3, PAO2_0=101.4
+  RV#3:  delta_Aa=+15.00, tau_w=20.5, paco2_0=33.0, PAO2_0=122.9  [delta_Aa at bound]
+  RV#4:  delta_Aa=+15.00, tau_w=19.4, paco2_0=30.0, PAO2_0=126.7  [delta_Aa, paco2_0 at bounds]
+  FRC#5: delta_Aa=+15.00, tau_w=65.6, paco2_0=50.0, PAO2_0=101.7  [delta_Aa, paco2_0 at bounds]
+  FL#6:  delta_Aa=+15.00, tau_w=84.2, paco2_0=28.7, PAO2_0=128.3  [delta_Aa at bound]
+
+FRC differentiation: FRC#2 vs FRC#5 IC L2 divergence = 4.53 (PASS)
+  FRC#2: PAO2_0=101.4, tau_w=69.1, paco2_0=48.3
+  FRC#5: PAO2_0=101.7, tau_w=65.6, paco2_0=50.0
+  -> ICs are close despite freedom to diverge, suggesting type constraints were reasonable
+
+Fit quality:
+  Hold     R2(apnea)  R2(recovery)  R2(full)
+  FRC#2    0.8004     -0.886        0.912
+  RV#3     0.9725     -0.489        0.945
+  RV#4     0.8741     -2.768        0.801
+  FRC#5    0.9711      0.466        0.949
+  FL#6     0.9916     -3.965        0.982
+  AVG      0.9220     -1.528        0.918
+
+=== EXP C: d-Sensitivity Sweep ===
+
+   d   |    Loss  | gamma  | pvo2  | k_co2  | tau_f | tau_reoxy
+  10.0 | 187,630  | 1.2688 | 33.13 | 0.2500*| 30.00*| 15.00*
+  15.0 | 155,096  | 1.4838 | 37.30 | 0.2500*| 30.00*| 15.00*
+  20.0 | 119,038  | 2.5000*| 22.96 | 0.0200*| 30.00*| 15.00*
+  25.0 | 101,225  | 2.4534 | 23.22 | 0.0200*| 30.00*| 15.00*
+  (* = at bound)
+
+Key finding: d is NOT a nuisance parameter. Downstream physiology changes dramatically:
+  - gamma: 1.27 at d=10 → 2.50 at d=20 (range 1.23)
+  - pvo2: 33 at d=10 → 23 at d=20 (range 14.3)
+  - k_co2: 0.25 at d=10 → 0.02 at d=20 (flips from upper to lower bound)
+  - tau_f and tau_reoxy stuck at bounds for ALL d values
+
+Loss monotonically decreases with d (187k→155k→119k→101k), confirming
+the delay wants to be as large as possible.
+
+=== SUCCESS CRITERIA ASSESSMENT ===
+
+1. Exp A: d moves away from upper bound    → FAIL (d=30, still at bound)
+2. Exp B: FRC gets different ICs           → PASS (L2 divergence=4.53)
+3. Exp B: gamma closer to 1.0 than v6.01  → FAIL (2.17 vs 2.06, worse)
+4. Exp B: R2(recovery) > 0                → FAIL (avg=-1.53)
+5. Exp B: R2(apnea) avg >= 0.95           → FAIL (avg=0.922)
+6. Exp C: d is nuisance                   → FAIL (params vary dramatically with d)
+
+=== DIAGNOSIS ===
+
+The structural fixes did NOT resolve the d↔pao2_0 confounding. Key findings:
+
+1. DELAY-RECOVERY COUPLING IS FUNDAMENTAL
+   d, tau_reoxy, and tau_f are all maximizing because the sensor pipeline
+   (delay → filter) creates a "smearing" effect that improves the fit of
+   noisy recovery data. The optimizer discovers that maximum delay + maximum
+   filter smoothing + maximum recovery time constant together explain the
+   data better than physically realistic values.
+
+2. AGEq COUPLING IS INEFFECTIVE
+   delta_Aa hits its +15 upper bound for almost every hold. The constraint
+   PAO2_0 = 149.2 - PaCO2/RQ + delta_Aa just shifted the confounding from
+   pao2_0 to delta_Aa. The optimizer finds the same effective PAO2_0 values
+   via delta_Aa adjustment.
+
+3. GAMMA REGULARIZATION TOO WEAK
+   Despite lambda=500 penalty, gamma still goes to 2.17-2.33. The SSE
+   reduction from inflating gamma overwhelms the penalty. The d=10
+   sensitivity run shows gamma=1.27 is achievable but at huge SSE cost
+   (187k vs 95k).
+
+4. RECOVERY MODEL IS INADEQUATE
+   R2(recovery) is negative for most holds. The exponential re-oxygenation
+   model with a single time constant cannot capture the actual recovery
+   trajectory. The sensor delay+filter combo tries to compensate but creates
+   physically unrealistic parameter values.
+
+5. k_co2 BIFURCATION
+   At d<20: k_co2 hits upper bound (0.25), compensating for less delay
+   At d≥20: k_co2 hits lower bound (0.02), because large delay already
+   shifts the curve enough. This confirms deep confounding between d and
+   the CO2 pathway.
+
+=== NEXT STEPS (v6.03 recommendations) ===
+
+1. BETTER RECOVERY PHYSIOLOGY: Replace single-exponential with sigmoidal or
+   two-phase recovery (fast alveolar filling + slow circulation equilibration)
+
+2. DECOUPLE SENSOR FROM PHYSIOLOGY: Fit sensor params (d, tau_f) from a
+   known-physiology segment (e.g., initial plateau) rather than globally
+
+3. FIX d AND gamma EXTERNALLY: Literature values (d≈8-12s for finger
+   sensors, gamma≈1.0) rather than trying to identify from data
+
+4. CONSTRAIN TOTAL SMOOTHING: Bound d+tau_f sum rather than individually,
+   since they trade off freely
+
+5. MULTI-SESSION DATA: Single-session fitting provides insufficient
+   constraints. Multiple sessions with different physiology but same
+   sensor would break the confounding.
+
+================================================================================
+FULL RAW OUTPUT
+================================================================================
+
+========================================================================================================================
+v6.02: Structural Fixes — Per-Hold ICs, AGEq Coupling, Constrained Recovery
+========================================================================================================================
+
+Loading holds with recovery data...
+  FL#1 [EXCLUDED]: 178 apnea + 5 recovery pts (t_end=179s, recovery SpO2 97-97%)
+  FRC#2: 132 apnea + 48 recovery pts (t_end=134s, recovery SpO2 78-94%)
+  RV#3: 126 apnea + 49 recovery pts (t_end=129s, recovery SpO2 52-96%)
+  RV#4: 192 apnea + 56 recovery pts (t_end=193s, recovery SpO2 59-91%)
+  FRC#5: 185 apnea + 60 recovery pts (t_end=187s, recovery SpO2 41-96%)
+  FL#6: 366 apnea + 38 recovery pts (t_end=372s, recovery SpO2 52-89%)
+
+Fitting on 5 holds (types: ['FL', 'FRC', 'RV']), excluding 1 hold(s)
+
+Structural changes active:
+  - Alveolar Gas Equation coupling (PAO2_0 = 149.2 - PaCO2/0.8 + delta_Aa)
+  - Gamma regularization (lambda=500.0, pulling toward 1.0)
+  - tau_reoxy constrained to [5, 15]
+
+========================================================================================================================
+EXP A: Type-specific ICs + AGEq + gamma reg + constrained tau_reoxy
+========================================================================================================================
+
+  Exp A: 16 params (7 shared + 3x3 type-specific)
+  Converged: True, fun=102624.07, nfev=2068851
+
+  Exp A:
+            pvo2 =  23.2966  [ 15.00,  50.00]
+           gamma =   2.3326  [  0.80,   2.50]
+           k_co2 =   0.0200  [  0.02,   0.25] ** AT BOUND **
+        r_offset =  -1.4228  [ -3.00,   3.00]
+       tau_reoxy =  15.0000  [  5.00,  15.00] ** AT BOUND **
+               d =  30.0000  [  1.00,  30.00] ** AT BOUND **
+           tau_f =  24.9966  [  1.00,  30.00]
+
+  Exp A — Type-specific ICs:
+    FL: delta_Aa=+15.00, tau_w=79.4, paco2_0=27.6, PAO2_0=129.7  [delta_Aa=hi]
+    FRC: delta_Aa=+15.00, tau_w=67.1, paco2_0=50.0, PAO2_0=101.7  [delta_Aa=hi, paco2_0=hi]
+    RV: delta_Aa=+15.00, tau_w=18.1, paco2_0=30.0, PAO2_0=126.7  [delta_Aa=hi, paco2_0=lo]
+
+========================================================================================================================
+EXP B: Per-hold ICs + L2 regularization + AGEq + gamma reg
+========================================================================================================================
+
+  Exp B: 22 params (7 shared + 3x5 per-hold)
+  Converged: True, fun=95465.58, nfev=3618189
+
+  Exp B:
+            pvo2 =  23.4743  [ 15.00,  50.00]
+           gamma =   2.1679  [  0.80,   2.50]
+           k_co2 =   0.0200  [  0.02,   0.25] ** AT BOUND **
+        r_offset =  -1.3249  [ -3.00,   3.00]
+       tau_reoxy =  15.0000  [  5.00,  15.00] ** AT BOUND **
+               d =  30.0000  [  1.00,  30.00] ** AT BOUND **
+           tau_f =  25.3572  [  1.00,  30.00]
+
+  Exp B — Per-hold ICs:
+    FRC#2: delta_Aa=+12.61, tau_w=69.1, paco2_0=48.3, PAO2_0=101.4
+    RV#3: delta_Aa=+15.00, tau_w=20.5, paco2_0=33.0, PAO2_0=122.9  [delta_Aa=hi]
+    RV#4: delta_Aa=+15.00, tau_w=19.4, paco2_0=30.0, PAO2_0=126.7  [delta_Aa=hi, paco2_0=lo]
+    FRC#5: delta_Aa=+15.00, tau_w=65.6, paco2_0=50.0, PAO2_0=101.7  [delta_Aa=hi, paco2_0=hi]
+    FL#6: delta_Aa=+15.00, tau_w=84.2, paco2_0=28.7, PAO2_0=128.3  [delta_Aa=hi]
+
+========================================================================================================================
+EXP C: d-Sensitivity Sweep (fix d, re-optimize using Exp B structure)
+========================================================================================================================
+
+    d=10.0:
+      loss=187630.24, nfev=4356069
+
+    d=15.0:
+      loss=155095.87, nfev=3902012
+
+    d=20.0:
+      loss=119037.57, nfev=5713029
+
+    d=25.0:
+      loss=101224.60, nfev=4259709
+
+========================================================================================================================
+PER-HOLD R2 COMPARISON
+========================================================================================================================
+  Hold                  R2f    R2a    R2r    R2f    R2a    R2r
+                                A:TypeICs         B:PerHoldICs
+  ------------------ -------------------- --------------------
+  FL#1 (excl)        0.3489 0.1362 0.0000 0.5177 0.3563 0.0000
+  FRC#2              0.8544 0.8525 -2.6460 0.9119 0.8004 -0.8857
+  RV#3               0.9310 0.9669 -2.0951 0.9452 0.9725 -0.4893
+  RV#4               0.7943 0.8821 -3.1122 0.8006 0.8741 -2.7684
+  FRC#5              0.9488 0.9732 0.4392 0.9492 0.9711 0.4662
+  FL#6               0.9818 0.9913 -5.1690 0.9815 0.9916 -3.9646
+
+  Avg (fitted)       0.9020 0.9332 -2.5166 0.9177 0.9220 -1.5284
+
+========================================================================================================================
+EXP C: d-SENSITIVITY RESULTS
+========================================================================================================================
+
+      d |       loss |    gamma |     pvo2 |    k_co2 |    tau_f |  tau_reoxy |   r_offset
+  ------+------------+----------+----------+----------+----------+------------+-----------
+   10.0 |  187630.24 |   1.2688 |    33.13 |   0.2500 |    30.00 |      15.00 |    -1.2468
+   15.0 |  155095.87 |   1.4838 |    37.30 |   0.2500 |    30.00 |      15.00 |    -0.9851
+   20.0 |  119037.57 |   2.5000 |    22.96 |   0.0200 |    30.00 |      15.00 |    -2.4967
+   25.0 |  101224.60 |   2.4534 |    23.22 |   0.0200 |    30.00 |      15.00 |    -1.8022
+
+  Per-hold R2(apnea) / R2(recovery) by d:
+  Hold         |         d=10 |         d=15 |         d=20 |         d=25
+  -------------+--------------+--------------+--------------+-------------
+  FRC#2        | 0.799/-1.596 | 0.904/-2.022 | 0.817/-0.807 | 0.818/-1.042
+  RV#3        | 0.742/0.408 | 0.827/0.511 | 0.963/0.232 | 0.973/-0.223
+  RV#4        | 0.930/-7.431 | 0.912/-5.884 | 0.899/-4.424 | 0.883/-3.918
+  FRC#5        | 0.836/-0.339 | 0.879/0.024 | 0.947/-0.036 | 0.966/0.317
+  FL#6        | 0.989/0.020 | 0.994/-0.179 | 0.985/-3.408 | 0.991/-4.640
+
+========================================================================================================================
+IDENTIFIABILITY SUMMARY
+========================================================================================================================
+
+  A:TypeICs: 3/16 shared params at bounds
+    k_co2=lo
+    tau_reoxy=hi
+    d=hi
+
+  B:PerHoldICs: 3/22 shared params at bounds
+    k_co2=lo
+    tau_reoxy=hi
+    d=hi
+
+========================================================================================================================
+SUCCESS CRITERIA CHECK
+========================================================================================================================
+
+  1. [Exp A] d=30.00 interior (not at bound): FAIL
+  2. [Exp B] FRC IC divergence (L2 norm): 4.53 (PASS (different ICs))
+  3. [Exp B] gamma=2.1679 (v6.01 was 2.06, improvement=-0.1079): FAIL
+  4. [Exp B] R2(recovery) avg=-1.5284, all>0: FAIL
+  5. [Exp B] R2(apnea) avg=0.9220 >= 0.95: FAIL
+
+  6. [Exp C] Parameter stability across d=[10.0, 15.0, 20.0, 25.0]:
+     gamma range: 1.2312 (VARIES)
+     pvo2 range:  14.34 (VARIES)
+     k_co2 range: 0.2300 (VARIES)
+     -> d is NOT nuisance (params depend on d)
