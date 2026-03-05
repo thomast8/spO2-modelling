@@ -1,0 +1,238 @@
+v6.04: Stabilize Sensor Pipeline + Recovery Physiology — Results
+================================================================
+
+Date: 2026-03-04
+
+## Data Recap
+
+Subject: Thomas, healthy male, trained breath-holder
+Device: Viatom Checkme O2 Max pulse oximeter (finger sensor, 1Hz sampling)
+Session: 6 breath-hold apneas at varying lung volumes
+
+Hold Table:
+  #1 FL   178s apnea + 5 recovery pts   SpO2: 97-99%   [EXCLUDED: <2% variation]
+  #2 FRC  132s apnea + 48 recovery pts  SpO2: 78-98%   Nadir at t=151s (+17s post-apnea)
+  #3 RV   126s apnea + 49 recovery pts  SpO2: 52-98%   Nadir at t=139s (+10s post-apnea)
+  #4 RV   174s apnea + 56 recovery pts  SpO2: 41-98%   Nadir at t=168s (-5s, during apnea!)
+  #5 FRC  185s apnea + 60 recovery pts  SpO2: 41-98%   Nadir at t=222s (+35s post-apnea)
+  #6 FL   366s apnea + 38 recovery pts  SpO2: 52-98%   Nadir at t=395s (+23s post-apnea)
+
+Lung volume types:
+  FL  = Full Lungs (TLC): maximal O2 store, slowest desaturation
+  FRC = Functional Residual Capacity: moderate O2 store
+  RV  = Residual Volume: minimal O2 store, fastest desaturation
+
+Key nadir timing observation:
+  Observed nadir delays from apnea end: -5s, +10s, +17s, +23s, +35s
+  Huge heterogeneity — a single global delay cannot fit all holds.
+
+
+## Full Model (Exp A/B/C common structure)
+
+### Physiology Layer
+
+PaO2_0 = 149.2 - PaCO2_0/0.8 - Aa          [alveolar gas equation, Aa >= 0]
+
+Apnea (t <= t_end):
+  PaO2(t) = PvO2 + (PaO2_0 - PvO2) * exp(-t / tau_washout)
+
+Recovery (t > t_end):
+  PaO2_end = PvO2 + (PaO2_0 - PvO2) * exp(-t_end / tau_washout)
+  PaO2(t) = P_EQ - (P_EQ - PaO2_end) * exp(-(t - t_end) / tau_reoxy)
+
+CO2 (apnea): PaCO2(t) = PaCO2_0 + k_co2 * t
+CO2 (recovery): PaCO2(t) = 40 + (PaCO2_end - 40) * exp(-(t - t_end) / tau_clear)
+
+### ODC Layer (Severinghaus)
+
+P50_eff(t) = 26.6 + 0.48 * (PaCO2(t) - 40)        [Bohr shift]
+PaO2_virt = PaO2 * (26.6 / P50_eff)
+PaO2_adj = 26.6 * (PaO2_virt / 26.6)^gamma          [steepness]
+SaO2 = 100 / (1 + 23400 / (PaO2_adj^3 + 150*PaO2_adj))
+
+### Sensor Pipeline
+
+Delay:     SaO2_delayed(t) = SaO2(t - d)
+IIR filter: alpha = dt / (tau_f + dt), s_meas = IIR(SaO2_delayed, alpha)
+Output:     SpO2_pred = clip(s_meas + r_offset, 0, 100)
+
+### Exp D modification: Two-timescale recovery
+
+Recovery PaO2:
+  PaO2(t) = P_EQ - A_fast * deficit * exp(-(t-t_end)/tau_fast)
+                  - (1-A_fast) * deficit * exp(-(t-t_end)/tau_slow)
+where deficit = P_EQ - PaO2_end
+
+### Parameters
+
+Shared (Exp A/B: 8, Exp C: 8+5 delta_d, Exp D: 10):
+  Aa          (0, 30)      A-a gradient (mmHg)
+  PvO2        (15, 50)     Mixed venous PO2 (mmHg)
+  k_co2       (0.02, 0.25) CO2 accumulation rate (mmHg/s)
+  r_offset    (-3, 3)      SpO2 reading offset (%)
+  tau_reoxy   (5, 30)      Re-oxygenation time constant (s)
+  d           (1, 30)      Sensor delay (s)
+  tau_f       (1, 8)*      IIR filter time constant (s) [*Exp D: (1,30)]
+  gamma       (0.8, 3.0)   ODC steepness exponent
+  [Exp C] delta_d_i  (-10, 10) per-hold delay deviation
+  [Exp D] A_fast    (0.3, 0.9) fast recovery fraction
+  [Exp D] tau_slow  (30, 120)  slow recovery time constant (s)
+
+Per-hold (2 per hold, 5 holds = 10):
+  tau_washout  varies by type  O2 washout time constant (s)
+  PaCO2_0      varies by type  Initial arterial CO2 (mmHg)
+
+### Loss Function
+
+SSE = sum_i [ w_i * (SpO2_obs - SpO2_pred)^2 ]     on nadir window [0, t_end+45s]
+  where w_i = 3.0 if SpO2 < 95%, else 1.0
+
+Nadir timing: lambda_nadir * (t_nadir_pred - t_nadir_obs)^2   [Exp B: Huber]
+CO2 priors:   lambda_k * (k_co2 - 0.06)^2 + lambda_paco2 * (paco2_0 - 40)^2
+Gamma prior:  lambda_gamma * (gamma - 1.0)^2
+d prior:      lambda_d * (d - 15.5)^2
+IC reg:       lambda_reg * sum (IC_i - IC_type_mean)^2
+[Exp C]:      lambda_shrink * sum(delta_d_i^2)
+
+Regularization strengths:
+  lambda_nadir = 1000, lambda_k = 2000, lambda_paco2 = 1000
+  lambda_gamma = 2000, lambda_d = 2000, lambda_reg = 10, lambda_shrink = 500
+
+Fixed constants:
+  P50_BASE = 26.6 mmHg, P_EQ = 100 mmHg, RQ = 0.8
+  tau_clear = 30s, FiO2*(PB-PH2O) = 149.2 mmHg
+
+
+## Results Summary
+
+### Exp A: Constrained tau_f (1-8s) + Widened Gamma (0.8-3.0)
+
+Converged: True, 18 params
+
+Key parameters:
+  Aa=0.00 *BOUND*, pvo2=27.89, k_co2=0.096, r_offset=-2.27
+  tau_reoxy=30.00 *BOUND*, d=17.58, tau_f=8.00 *BOUND*, gamma=1.454
+
+R2(apnea) avg: 0.7641
+Nadir timing error avg: 10.6s
+
+Assessment: tau_f still at upper bound (8s). Constraining tau_f did NOT free the model —
+it just capped the sponge. gamma found an interior value (1.45), confirming v6.03's bound
+was too tight. d remains anchored at ~17.5 (good).
+
+### Exp B: Huber Nadir Penalty (delta=5s)
+
+Converged: True, 18 params
+
+Key parameters:
+  Aa=0.00 *BOUND*, pvo2=19.35, k_co2=0.060, r_offset=-1.15
+  tau_reoxy=30.00 *BOUND*, d=18.05, tau_f=8.00 *BOUND*, gamma=1.295
+
+R2(apnea) avg: 0.7668
+Nadir timing error avg: 10.8s
+
+Assessment: Huber penalty did NOT reduce timing error — it's still ~10.8s avg.
+Parameters very similar to Exp A. The Huber loss tolerates outliers but didn't help
+the optimizer find better timing because the squared penalty wasn't the bottleneck.
+
+### Exp C: Hierarchical Per-Hold Delay (23 params)
+
+Converged: False (hit maxiter), 23 params
+
+Key parameters (shared):
+  Aa=0.00 *BOUND*, pvo2=19.33, k_co2=0.060, r_offset=-3.00 *BOUND*
+  tau_reoxy=30.00 *BOUND*, d_0=16.50, tau_f=8.00 *BOUND*, gamma=1.522
+
+Per-hold effective delays:
+  FRC#2: delta_d=+0.57,  d_eff=17.07
+  RV#3:  delta_d=-2.22,  d_eff=14.27
+  RV#4:  delta_d=-9.03,  d_eff=7.47     ← nadir during apnea
+  FRC#5: delta_d=+10.00, d_eff=26.50    ← nadir +35s post-apnea *BOUND*
+  FL#6:  delta_d=+4.12,  d_eff=20.62
+
+R2(apnea) avg: 0.7702
+Nadir timing error avg: 5.2s  ← Best timing of all experiments!
+
+Assessment: The hierarchical delay worked as hypothesized. The delta_d pattern is
+physiologically interpretable:
+  - RV#4 needs short delay (nadir during apnea → peripheral vasoconstriction → fast transit)
+  - FRC#5 needs long delay (nadir +35s → slow peripheral perfusion)
+  - FRC#5 hits +10s bound → would want more if allowed
+BUT: R2 didn't improve much (0.77 vs 0.76). The timing improvement comes at the cost
+of 5 extra parameters, and the model still can't fit the SpO2 curves well.
+
+### Exp D: Two-Timescale Recovery (20 params)
+
+Converged: True, 20 params
+
+Key parameters:
+  Aa=0.00 *BOUND*, pvo2=29.46, k_co2=0.104, r_offset=-0.39
+  tau_reoxy=28.27, d=14.75, tau_f=30.00 *BOUND*, gamma=1.833
+  A_fast=0.30 *BOUND*, tau_slow=120.00 *BOUND*
+
+R2(apnea) avg: 0.9297  ← Best R2 by far!
+Nadir timing error avg: 10.6s
+
+Assessment: Exp D achieves dramatically better R2 (0.93 vs 0.77) but NOT because the
+two-timescale recovery fixed the filter. tau_f is still at 30s bound — the sponge persists.
+A_fast and tau_slow are both at bounds, meaning the two-timescale model degenerates into
+"mostly slow exponential" (A_fast=0.3 minimum, tau_slow=120 maximum). The high R2 comes
+from the large tau_f smoothing (30s) combined with high gamma (1.83), not from better
+recovery physics. This is essentially the v6.03 regime with wider gamma bounds.
+
+
+## d-Profile (Exp A structure)
+
+  d=10: loss=1,437,020
+  d=13: loss=1,248,632
+  d=16: loss=1,153,770  ← MINIMUM
+  d=20: loss=1,168,417
+
+Non-monotone: YES (minimum at d=16, then rises at d=20)
+This confirms v6.03's finding: the nadir penalty creates a well-defined minimum near d=15-16.
+
+
+## Success Criteria Summary
+
+  1. [Exp A] tau_f interior (<8):         FAIL — at 8s bound
+  2. [Exp A] gamma < 2.5:                 PASS — 1.454
+  3. [Exp A] d in 13-18:                  PASS — 17.58
+  4. [Exp A] R2(apnea) >= 0.93:           FAIL — 0.764
+  5. [Exp B] Timing error < 8s:           FAIL — 10.8s
+  6. [Exp C] Timing error < 5s:           FAIL (barely) — 5.2s
+  7. [Exp C] delta_d interpretable:       PASS — clear pattern
+  8. [Exp D] tau_f interior (<10):         FAIL — still 30s
+  9. [All] k_co2 in 0.04-0.20:            PASS — all interior
+ 10. [d-profile] Non-monotone near 15:    PASS — minimum at d=16
+
+
+## Key Insights
+
+1. **tau_f is structurally non-identifiable from tau_reoxy+tau_washout.**
+   Whether constrained (Exp A/B/C) or unconstrained (Exp D), the optimizer always
+   maximizes tau_f. The IIR filter absorbs model error regardless of recovery model.
+   This means tau_f cannot be identified from this data alone.
+
+2. **Widening gamma bounds was the right move.** gamma found 1.3-1.8 across experiments,
+   never hitting the upper bound (3.0). The v6.03 bound of 1.5 was too tight.
+
+3. **Nadir timing heterogeneity is real and interpretable.** Exp C's delta_d pattern
+   (RV#4:-9s, FRC#5:+10s) maps to physiological differences in peripheral perfusion.
+   A single global d forces a compromise ~16-18s that fits no hold well.
+
+4. **The two-timescale recovery model doesn't solve the filter sponge.** Exp D's
+   high R2 comes from large tau_f + high gamma, not better recovery physics. The
+   A_fast and tau_slow parameters are unidentifiable (both at bounds).
+
+5. **The fundamental bottleneck is the filter's role as error absorber.**
+   Future work should either: (a) fix tau_f at a literature value (3-5s) and accept
+   the poorer fit, or (b) replace the IIR filter with a physiological delay model
+   (e.g., circulatory transport function) that has more structure.
+
+
+## Files
+
+Script:     backend/scripts/exp_v6_04_stabilize.py
+Plots:      backend/scripts/exp_v6_04_stabilize.png (per-hold detail)
+            backend/scripts/exp_v6_04_d_profile.png (d-profile sweep)
+Results:    backend/scripts/exp_v6_04_results.txt (this file)
