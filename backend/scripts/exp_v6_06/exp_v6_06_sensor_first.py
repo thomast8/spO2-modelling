@@ -34,7 +34,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import differential_evolution
 from scipy.special import gammainc
 
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "spo2.db"
+DB_PATH = Path(__file__).resolve().parents[3] / "data" / "spo2.db"
 
 P50_BASE = 26.6
 P_EQ = 100.0
