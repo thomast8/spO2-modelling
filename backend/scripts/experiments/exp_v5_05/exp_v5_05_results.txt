@@ -1,0 +1,171 @@
+Experiment v5.05 — HR-Coupled Beat-Based Sensor
+=================================================
+
+Hypothesis
+==========
+Expressing delay and filter in heartbeats rather than seconds should improve
+fit, especially on holds with strong bradycardia. During apnea, HR drops from
+~60-100 bpm to ~45-55 bpm. If transit time is B_delay heartbeats, the delay in
+seconds stretches as HR drops:
+
+    d(t) = B_delay * 60 / HR(t)
+
+This couples the sensor model to cardiovascular dynamics: slower heart rate
+means longer circulation time, which is physiologically motivated.
+
+
+Data
+====
+Session 1, 6 holds (per-hold fits):
+
+  Hold   | Type | HR range (bpm)
+  -------|------|---------------
+  FL #1  | FL   | unknown
+  FL #6  | FL   | 50–106
+  FRC #2 | FRC  | 47–89
+  FRC #5 | FRC  | 46–88
+  RV #3  | RV   | 51–104
+  RV #4  | RV   | 53–104
+
+HR data used as additional input for the beat-based model variant.
+
+
+Model Variants (5 total)
+========================
+
+1. CO2-Bohr (7 params) — mechanistic baseline, no sensor
+   Standard physiology + ODC, no delay or filtering.
+
+2. CO2-Bohr + Delay (8 params) — constant delay only
+   Adds constant delay d in [3, 30] s and gamma in [0.8, 1.5].
+
+3. Const-D+F (9 params) — constant delay + constant filter
+   Adds constant delay d in [3, 30] s and first-order IIR filter
+   tau_f in [1, 20] s.
+
+4. Beat-Sensor (9 params) — HR-dependent delay + HR-dependent filter
+   THE MAIN TEST. Parameters in heartbeats, converted to seconds via HR(t):
+
+     d(t)     = B_delay * 60 / HR(t)       [time-varying delay]
+     tau_f(t) = B_avg   * 60 / HR(t)       [time-varying filter]
+
+   Implementation:
+     - HR floored at 30 bpm for numerical safety
+     - Per-sample interpolation for delay:
+         sa_delayed[i] = interp(t[i] - d_t[i], t, SaO2)
+     - Per-sample IIR with time-varying alpha:
+         alpha_i    = dt / (tau_f_i + dt)
+         s_meas[i]  = (1 - alpha_i) * s_meas[i-1] + alpha_i * sa_delayed[i]
+
+   Bounds:
+     B_delay in [5, 25] beats
+     B_avg   in [3, 15] beats
+     gamma   in [0.8, 2.0]
+
+   At mean HR ~70 bpm: B_delay=15 ~ 12.9 s delay, B_avg=9 ~ 7.7 s filter.
+
+5. Richards (5 params) — phenomenological baseline
+   Sigmoid curve fit, no physiological structure.
+
+
+Per-Hold Results
+================
+
+All 5 variants overlaid per hold. R^2 values approximate (read from plots).
+
+FL #1
+-----
+  CO2-Bohr:        R^2 ~ 0.78
+  CO2-Bohr+Delay:  R^2 ~ 0.85
+  Const-D+F:       R^2 ~ 0.87
+  Beat-Sensor:     R^2 ~ 0.88
+  Richards:        R^2 ~ 0.85
+  Notes: Beat-Sensor marginally better than Const-D+F (~0.01 R^2).
+
+FL #6
+-----
+  CO2-Bohr:        R^2 ~ 0.98
+  CO2-Bohr+Delay:  R^2 ~ 0.99
+  Const-D+F:       R^2 ~ 0.99
+  Beat-Sensor:     R^2 ~ 0.99
+  Richards:        R^2 ~ 0.99
+  Notes: All variants nearly identical. Easy hold, little room to improve.
+
+FRC #2
+------
+  CO2-Bohr:        R^2 ~ 0.94
+  CO2-Bohr+Delay:  R^2 ~ 0.95
+  Const-D+F:       R^2 ~ 0.96
+  Beat-Sensor:     R^2 ~ 0.96
+  Richards:        R^2 ~ 0.98
+  Notes: Beat-Sensor matches Const-D+F. Richards wins (more flexible sigmoid).
+
+FRC #5
+------
+  CO2-Bohr:        R^2 ~ 0.96
+  CO2-Bohr+Delay:  R^2 ~ 0.97
+  Const-D+F:       R^2 ~ 0.98
+  Beat-Sensor:     R^2 ~ 0.98
+  Richards:        R^2 ~ 0.97
+  Notes: Very close across all mechanistic variants.
+
+RV #3
+------
+  CO2-Bohr:        R^2 ~ 0.93
+  CO2-Bohr+Delay:  R^2 ~ 0.96
+  Const-D+F:       R^2 ~ 0.97
+  Beat-Sensor:     R^2 ~ 0.98
+  Richards:        R^2 ~ 0.97
+  Notes: Beat-Sensor and Const-D+F nearly identical.
+
+RV #4
+------
+  CO2-Bohr:        R^2 ~ 0.96
+  CO2-Bohr+Delay:  R^2 ~ 0.96
+  Const-D+F:       R^2 ~ 0.97
+  Beat-Sensor:     R^2 ~ 0.97
+  Richards:        R^2 ~ 0.97
+  Notes: All variants very similar.
+
+
+Parameter Behaviour
+===================
+- B_delay tends to pin at bounds (5 or 25 beats) — same identifiability
+  problem seen with constant delay d in earlier experiments.
+- gamma still inflated (1.5–2.0) — beat-based sensor does not resolve this.
+- The beat-based parameters do not converge to physiologically distinct values
+  compared to constant-time equivalents.
+
+
+Success Criteria & Verdict
+==========================
+Criterion: Beat-Sensor should show meaningful R^2 improvement (>0.02) over
+Const-D+F, especially on holds with large HR variation.
+
+Result: REJECTED. Maximum improvement is ~0.01 R^2 (FL #1). On all other
+holds the difference is negligible (<0.005).
+
+
+Conclusions
+===========
+1. REJECTED: HR-coupling does not improve fit enough to justify the complexity.
+
+2. The identifiability problem is structural (monotone desaturation curve),
+   not about constant vs time-varying sensor parameters. The data simply
+   cannot distinguish a 12 s constant delay from a 15-beat HR-varying delay
+   that averages ~12 s.
+
+3. HR variation within apnea holds is too small (~2:1 ratio, e.g. 50–100 bpm)
+   to discriminate beat-based from constant models. Would need much wider HR
+   variation (e.g. exercise vs rest) to see a benefit.
+
+4. Computational cost: the beat-based model is ~10x slower (per-sample Python
+   loop vs vectorized scipy.signal.lfilter) for negligible benefit.
+
+5. Decision: use constant-time sensor model going forward (simpler, equally
+   effective, vectorizable).
+
+6. The path forward is NOT more complex sensor models, but rather:
+   - Recovery data to break delay/physiology symmetry (explored in v6)
+   - Global/shared sensor parameters across holds
+   - Structural constraints on physiology parameters
