@@ -1,0 +1,505 @@
+v6.07: Slope Covariate + Rebalanced Sensor-Only + Apnea-Only Physiology — Results
+==================================================================================
+
+Date: 2026-03-06
+
+
+## Data Recap
+
+Subject: Thomas, healthy male, trained breath-holder
+Device: Viatom Checkme O2 Max pulse oximeter (finger sensor, 1Hz sampling)
+Session: 6 breath-hold apneas at varying lung volumes
+
+Hold Table:
+  #1 FL   178s apnea + 5 recovery pts   SpO2: 97-99%   [EXCLUDED: <2% variation]
+  #2 FRC  132s apnea + 48 recovery pts  SpO2: 78-98%   Nadir at t=151s (+17s post-apnea)
+  #3 RV   126s apnea + 49 recovery pts  SpO2: 52-98%   Nadir at t=139s (+10s post-apnea)
+  #4 RV   174s apnea + 56 recovery pts  SpO2: 41-98%   Nadir at t=168s (-5s, during apnea!)
+  #5 FRC  185s apnea + 60 recovery pts  SpO2: 41-98%   Nadir at t=222s (+35s post-apnea)
+  #6 FL   366s apnea + 38 recovery pts  SpO2: 52-98%   Nadir at t=395s (+23s post-apnea)
+
+Lung volume types:
+  FL  = Full Lungs (TLC): maximal O2 store, slowest desaturation
+  FRC = Functional Residual Capacity: moderate O2 store
+  RV  = Residual Volume: minimal O2 store, fastest desaturation
+
+Covariates:
+  Depth severity g_h = max(0, 95 - min(SpO2_obs)) / 10:
+    FRC#2: g_h = 1.70 (min SpO2 = 78%)
+    RV#3:  g_h = 4.30 (min SpO2 = 52%)
+    RV#4:  g_h = 5.40 (min SpO2 = 41%)
+    FRC#5: g_h = 5.40 (min SpO2 = 41%)
+    FL#6:  g_h = 4.30 (min SpO2 = 52%)
+
+  End-slope s_h = (SpO2(t_end) - SpO2(t_end-10)) / 10:  [NEW in v6.07]
+    FRC#2: s_h =  0.000 (-s_h = -0.000)  [flat at end]
+    RV#3:  s_h = -0.900 (-s_h = +0.900)  [still falling fast]
+    RV#4:  s_h = -0.200 (-s_h = +0.200)  [slight fall]
+    FRC#5: s_h = -0.600 (-s_h = +0.600)  [falling]
+    FL#6:  s_h = -0.200 (-s_h = +0.200)  [slight fall]
+
+  Key observation: RV#4 and FRC#5 have identical g_h=5.40 but different slopes.
+  RV#4 nadir is DURING apnea (delay=-5s), FRC#5 nadir is 35s POST-apnea.
+  Slope alone doesn't separate them (0.200 vs 0.600 — modest difference).
+
+
+## Full Model
+
+### Physiology Layer (Exp A/C)
+
+PaO2_0 = 149.2 - PaCO2_0/0.8             [alveolar gas equation, Aa fixed at 0]
+
+Apnea (t <= t_end):
+  PaO2(t) = PvO2 + (PaO2_0 - PvO2) * exp(-t / tau_washout)
+
+Recovery (t > t_end):
+  PaO2_end = PvO2 + (PaO2_0 - PvO2) * exp(-t_end / tau_washout)
+  PaO2(t) = P_EQ - (P_EQ - PaO2_end) * exp(-(t - t_end) / tau_reoxy)
+  where P_EQ = 100 mmHg
+
+CO2 (apnea): PaCO2(t) = PaCO2_0 + k_co2 * t
+CO2 (recovery): PaCO2(t) = 40 + (PaCO2_end - 40) * exp(-(t - t_end) / tau_clear)
+  tau_clear = 30s (fixed)
+
+### ODC Layer (Severinghaus)
+
+P50_eff(t) = 26.6 + 0.48 * (PaCO2(t) - 40)        [Bohr shift]
+PaO2_virt = PaO2 * (26.6 / P50_eff)
+PaO2_adj = 26.6 * (PaO2_virt / 26.6)^gamma          [steepness]
+SaO2 = 100 / (1 + 23400 / (PaO2_adj^3 + 150*PaO2_adj))
+
+### Sensor Layer — Smooth Discrete Gamma Kernel + Two Covariates
+
+Same bin-integrated discrete gamma kernel as v6.06:
+  k = 1 / cv^2                           [continuous shape — no rounding]
+  theta = mean_lag * cv^2                 [scale]
+  h[i] = gammainc(k, (i+1)/theta) - gammainc(k, i/theta)    [bin-integrated]
+  h = h / sum(h)                          [normalize]
+
+Convolution with preconditioning:
+  padded = [signal[0]] * len(h) ++ signal
+  convolved = convolve(padded, h, mode="full")[:len(padded)]
+  output = convolved[len(h):]             [strip padding]
+
+Two-covariate lag model [NEW in v6.07]:
+  effective_mean_lag_h = max(mean_lag + beta_g * g_h + beta_s * (-s_h) + delta_h, 1.0)
+
+  beta_g:  depth severity coefficient (same as v6.06's single beta)
+  beta_s:  end-slope coefficient (-s_h positive when SpO2 falling)
+  delta_h: per-hold residual shift (zero-sum constrained)
+
+Output: SpO2_pred = clip(filtered + r_offset, 0, 100)
+
+### Latent Spline (Exp B — sensor-only identification)
+
+Monotone PCHIP spline with relaxed minimum [NEW in v6.07]:
+  8 knots: [0, t/4, t/2, 3t/4, t_end+m_h, t_end+m_h+10, t_end+m_h+30, t_end+m_h+45]
+  m_h = per-hold minimum shift, bounded [-8, 8]  [NEW: nadir can move before/after t_end]
+  Free params: x_0 (initial) + 4 decrements d_i (apnea, monotone down)
+                              + 3 increments r_i (recovery, monotone up)
+  PCHIP interpolation to 1-Hz grid, clipped to [0, 100]
+
+Pipeline: latent spline -> gamma kernel convolution -> SpO2_pred
+
+### Huber Timing Penalty [NEW in v6.07]
+
+  huber_loss(a, delta=8) = { 0.5*a^2           if |a| <= 8
+                           { 8*(|a| - 4)        if |a| > 8
+
+Used in Exp B (sensor-only) to prevent outlier holds (like RV#4 with 38s error
+in v6.06) from dominating the timing loss. Quadratic within 8s, linear beyond.
+
+### Parameters
+
+Exp A (24 params): 7 shared + 2 beta + 5 delta + 2x5 per-hold ICs
+  PvO2        (15, 50)     Mixed venous PO2 (mmHg)
+  k_co2       (0.02, 0.25) CO2 accumulation rate (mmHg/s)
+  r_offset    (-8, 8)      SpO2 reading offset (%)
+  tau_reoxy   (5, 30)      Re-oxygenation time constant (s)
+  mean_lag    (5, 45)      Gamma kernel mean delay (s)
+  cv          (0.10, 1.2)  Kernel coefficient of variation
+  gamma       (0.8, 3.0)   ODC steepness exponent
+  beta_g      (-2, 2)      Depth-severity lag coefficient  [NEW]
+  beta_s      (-2, 2)      End-slope lag coefficient  [NEW]
+  delta_h     (-15, 15)    Residual per-hold shifts
+  tau_washout varies       O2 washout time constant (s) [per-hold]
+  PaCO2_0     varies       Initial arterial CO2 (mmHg) [per-hold]
+
+Exp B (55 params): 5 kernel + 5 delta + 5 min_shift + 8x5 spline
+  mean_lag    (5, 45)
+  cv          (0.10, 1.2)
+  r_offset    (-8, 8)
+  beta_g      (-2, 2)
+  beta_s      (-2, 2)
+  delta_h     (-15, 15)    [5 per-hold residuals]
+  m_h         (-8, 8)      [5 per-hold nadir shifts]  [NEW]
+  x_0         (85, 100)    [per hold: initial SaO2]
+  dec_i       (0, 20)      [4 per hold: apnea decrements]
+  inc_i       (0, 30)      [3 per hold: recovery increments]
+
+Exp C (19 params): 4 physiology + 5 delta + 2x5 per-hold ICs
+  Frozen from Exp B: mean_lag, cv, r_offset, beta_g, beta_s
+  Fitted: pvo2, k_co2, tau_reoxy, gamma + 5 delta + 10 per-hold ICs
+  Apnea-only loss: window [0, t_end+5s]  [NEW: excludes recovery]
+
+Fixed constants:
+  Aa = 0 (A-a gradient)
+  P50_BASE = 26.6 mmHg
+  P_EQ = 100 mmHg
+  tau_clear = 30s
+
+### Loss Function
+
+SSE = sum_i [ w_i * (SpO2_obs - SpO2_pred)^2 ]     on nadir window
+  where w_i = 3.0 if SpO2 < 95%, else 1.0
+  Exp A/C: window [0, t_end+45s]
+  Exp C (apnea-only): window [0, t_end+5s]  [NEW]
+
+Nadir timing:
+  Exp A:   lambda_nadir * (t_nadir_pred - t_nadir_obs)^2
+  Exp B:   lambda_nadir * huber_loss(t_nadir_pred - t_nadir_obs, delta=8)  [NEW]
+  Exp C:   lambda_nadir * (t_nadir_pred - t_nadir_obs)^2
+
+CO2 priors:    lambda_k * (k_co2 - 0.06)^2 + lambda_paco2 * (paco2_0 - 40)^2
+Gamma prior:   lambda_gamma * (gamma - 1.0)^2
+mean_lag prior: lambda_mean * (mean_lag - 15.5)^2
+r_offset prior: lambda_r * r_offset^2
+IC reg:        lambda_reg * sum (IC_i - IC_type_mean)^2
+Delta reg:     lambda_shrink * sum(delta_i^2) + lambda_zerosum * (sum delta)^2
+Beta reg:      lambda_beta_g * beta_g^2 + lambda_beta_s * beta_s^2
+Min-shift reg: lambda_m * sum(m_h^2)  [NEW, Exp B only]
+Spline smooth: lambda_spline * sum(second_diff(knot_values)^2)  [Exp B only]
+
+Regularization strengths:
+  Exp A (co-trained, same as v6.06):
+    lambda_nadir=1000, lambda_k=2000, lambda_paco2=1000, lambda_gamma=2000
+    lambda_mean=2000, lambda_r=500, lambda_reg=10
+    lambda_shrink=300, lambda_zerosum=500, lambda_beta_g=200, lambda_beta_s=200
+
+  Exp B (sensor-only, REBALANCED):  [CHANGED from v6.06]
+    lambda_shrink=30 (was 300), lambda_beta_g=500 (was 200), lambda_beta_s=500
+    lambda_nadir=500 (Huber, was 0 in v6.06!), lambda_zerosum=500, lambda_m=20
+    lambda_spline=50
+
+  Exp C (frozen sensor):
+    lambda_nadir=1000, lambda_k=2000, lambda_paco2=1000, lambda_gamma=2000
+    lambda_mean=2000, lambda_r=500, lambda_reg=10
+    lambda_shrink=300, lambda_zerosum=500
+
+Optimizer: scipy.optimize.differential_evolution
+  Exp A:  popsize=30, maxiter=3000, seed=42
+  Exp B:  popsize=40, maxiter=5000, seed=42
+  Exp C:  popsize=30, maxiter=3000, seed=42
+  All: mutation=(0.5, 1.5), recombination=0.9, tol=1e-10, polish=True
+
+
+## Changes from v6.06
+
+1. End-slope covariate: s_h = (SpO2(t_end) - SpO2(t_end-10)) / 10
+   Two-covariate lag model: eff_lag = mean_lag + beta_g*g_h + beta_s*(-s_h) + delta_h
+2. Huber timing penalty in Exp B (robust to outliers, was entirely absent in v6.06 Exp C)
+3. Rebalanced sensor-only penalties: lambda_shrink 300->30, lambda_beta 200->500, added timing
+4. Relaxed latent minimum: per-hold nadir shift m_h in [-8,8] with prior lambda_m=20
+5. Apnea-only physiology in Exp C: loss window [0, t_end+5s] (no recovery fitting)
+
+
+## Results
+
+### Exp A: Co-trained + Two Covariates (24 params)
+
+  Converged: False, nfev=2,161,245
+
+  Shared parameters:
+    pvo2      =  21.78  [15, 50]
+    k_co2     =   0.068 [0.02, 0.25]
+    r_offset  =  -3.07  [-8, 8]
+    tau_reoxy =  30.00  [5, 30]  ** AT BOUND **
+    mean_lag  =  15.88  [5, 45]
+    cv        =   0.109 [0.10, 1.2]
+    gamma     =   1.46  [0.8, 3.0]
+
+  Kernel (smooth): k=84.0, mean=15.9s, std=1.7s
+
+  beta_g = 1.096  [-2, 2]  (positive -> deeper desat = longer lag)
+  beta_s = 2.000  [-2, 2]  ** AT BOUND **
+
+  Per-hold structural shift breakdown (base mean_lag=15.88):
+    FRC#2: bg*g=+1.86, bs*(-s)=-0.00, delta=+0.81,  total=+2.67,  eff_lag=18.55
+    RV#3:  bg*g=+4.71, bs*(-s)=+1.80, delta=-4.80,  total=+1.71,  eff_lag=17.59
+    RV#4:  bg*g=+5.92, bs*(-s)=+0.40, delta=-15.00, total=-8.68,  eff_lag=7.19  *BOUND*
+    FRC#5: bg*g=+5.92, bs*(-s)=+1.20, delta=+14.15, total=+21.26, eff_lag=37.14
+    FL#6:  bg*g=+4.71, bs*(-s)=+0.40, delta=+5.72,  total=+10.83, eff_lag=26.71
+
+  Per-hold fits:
+    FRC#2: R2a=-0.097, R2n=0.339, nadir_err=-1.0s
+    RV#3:  R2a=0.733,  R2n=0.528, nadir_err=+4.0s
+    RV#4:  R2a=0.906,  R2n=0.468, nadir_err=+10.0s
+    FRC#5: R2a=0.912,  R2n=0.932, nadir_err=-4.0s
+    FL#6:  R2a=0.909,  R2n=0.921, nadir_err=-1.0s
+  Avg: R2a=0.673, R2n=0.638, timing_err=4.0s
+
+
+### Exp B: Sensor-Only, Rebalanced (55 params)
+
+  Converged: False, nfev=11,003,376
+
+  Kernel parameters (no physiology model):
+    mean_lag  =  15.53  [5, 45]
+    cv        =   0.100 [0.10, 1.2]  ** AT BOUND **
+    r_offset  =   1.69  [-8, 8]
+    beta_g    =   0.384 [-2, 2]     (interior — not at bound!)
+    beta_s    =   0.264 [-2, 2]     (interior — not at bound!)
+
+  Kernel (smooth): k=100.0, mean=15.5s, std=1.6s (very peaked)
+
+  Per-hold shifts + min_shift:
+    FRC#2: bg*g=+0.65, bs*(-s)=-0.00, delta=+0.78,  eff_lag=16.96, m_h=-0.7s
+    RV#3:  bg*g=+1.65, bs*(-s)=+0.24, delta=+0.33,  eff_lag=17.75, m_h=-8.0s  *m_h BOUND*
+    RV#4:  bg*g=+2.08, bs*(-s)=+0.05, delta=-12.67, eff_lag=4.99,  m_h=-8.0s  *m_h BOUND*
+    FRC#5: bg*g=+2.08, bs*(-s)=+0.16, delta=+8.91,  eff_lag=26.67, m_h=-4.7s
+    FL#6:  bg*g=+1.65, bs*(-s)=+0.05, delta=+2.67,  eff_lag=19.91, m_h=-2.3s
+
+  Latent spline knot values (SaO2 % at each knot):
+    FRC#2: [100.0, 97.0, 93.0, 87.4, 82.1, 82.1, 82.1, 82.2]
+    RV#3:  [100.0, 94.3, 85.1, 71.0, 58.7, 58.8, 60.2, 62.3]
+    RV#4:  [100.0, 93.5, 83.1, 68.0, 55.9, 56.8, 58.6, 58.6]
+    FRC#5: [100.0, 94.7, 84.2, 65.5, 47.6, 47.6, 47.6, 47.7]
+    FL#6:  [100.0, 97.4, 90.3, 74.6, 58.9, 58.9, 59.9, 60.7]
+
+  Per-hold fits:
+    FRC#2: R2a=0.603, R2n=0.824, nadir_err=+0.0s
+    RV#3:  R2a=0.773, R2n=0.905, nadir_err=+1.0s
+    RV#4:  R2a=0.842, R2n=0.843, nadir_err=+1.0s
+    FRC#5: R2a=0.899, R2n=0.954, nadir_err=+0.0s
+    FL#6:  R2a=0.960, R2n=0.948, nadir_err=+0.0s
+  Avg: R2a=0.816, R2n=0.895, timing_err=0.4s
+
+
+### Exp C: Frozen Sensor + Apnea-Only Physiology (19 params)
+
+  Converged: False, nfev=1,710,990
+  Frozen sensor: mean_lag=15.53, cv=0.100, r_offset=1.69, beta_g=0.384, beta_s=0.264
+  Loss window: [0, t_end+5s] (apnea only — no recovery fitting)
+
+  Physiology parameters:
+    pvo2      =  20.88  [15, 50]
+    k_co2     =   0.074 [0.02, 0.25]
+    tau_reoxy =  30.00  [5, 30]  ** AT BOUND **
+    gamma     =   1.65  [0.8, 3.0]
+
+  Per-hold shifts:
+    FRC#2: bg*g=+0.65, bs*(-s)=-0.00, delta=+1.97,  eff_lag=18.16
+    RV#3:  bg*g=+1.65, bs*(-s)=+0.24, delta=-7.04,  eff_lag=10.38
+    RV#4:  bg*g=+2.08, bs*(-s)=+0.05, delta=-15.00, eff_lag=2.66  *BOUND*
+    FRC#5: bg*g=+2.08, bs*(-s)=+0.16, delta=+14.14, eff_lag=31.90
+    FL#6:  bg*g=+1.65, bs*(-s)=+0.05, delta=+7.90,  eff_lag=25.13
+
+  Per-hold fits:
+    FRC#2: R2a=0.926, R2n=0.172, nadir_err=-1.0s
+    RV#3:  R2a=0.966, R2n=0.125, nadir_err=-1.0s
+    RV#4:  R2a=0.941, R2n=0.328, nadir_err=+7.0s
+    FRC#5: R2a=0.978, R2n=0.817, nadir_err=-8.0s
+    FL#6:  R2a=0.995, R2n=0.941, nadir_err=-2.0s
+  Avg: R2a=0.961, R2n=0.477, timing_err=3.8s
+
+
+### Parameter Comparison (A vs B vs C)
+
+  Param        |      Exp A |      Exp B |      Exp C
+  -------------+------------+------------+-----------
+  pvo2         |    21.78   |     N/A    |    20.88
+  k_co2        |     0.068  |     N/A    |     0.074
+  r_offset     |    -3.07   |     1.69   |     1.69 (frozen)
+  tau_reoxy    |    30.00*  |     N/A    |    30.00*
+  mean_lag     |    15.88   |    15.53   |    15.53 (frozen)
+  cv           |     0.109  |     0.100* |     0.100 (frozen)
+  gamma        |     1.46   |     N/A    |     1.65
+  beta_g       |     1.10   |     0.384  |     0.384 (frozen)
+  beta_s       |     2.00*  |     0.264  |     0.264 (frozen)
+  (* = at bound)
+
+  Physiology stability: pvo2 diff = 0.90 (A vs C) — MUCH better than v6.06's 11.8
+  Gamma diff = 0.19 (A vs C) — very close agreement
+
+
+### Mean-lag Profile (9-point sweep, Exp A structure, two covariates)
+
+  mean_lag |      loss |  pvo2 | k_co2  |  r_off |    cv | gamma | beta_g | beta_s
+  ---------|-----------|-------|--------|--------|-------|-------|--------|-------
+       5.0 |   706,045 | 23.20 | 0.0727 | -5.157 | 0.100 | 1.600 |  1.994 |  2.000
+      10.0 |   571,903 | 22.20 | 0.0693 | -3.436 | 0.100 | 1.465 |  1.943 |  2.000
+      15.0 |   549,552 | 21.58 | 0.0668 | -2.826 | 0.121 | 1.442 |  1.512 |  1.997
+      20.0 |   537,044 | 21.48 | 0.0670 | -2.930 | 0.123 | 1.458 |  0.365 |  1.982
+      25.0 |   536,832 | 21.63 | 0.0691 | -2.928 | 0.141 | 1.486 | -0.752 |  1.999
+      30.0 |   580,088 | 33.85 | 0.1372 | -1.516 | 0.416 | 2.014 |  1.744 |  1.993
+      35.0 |   548,235 | 26.78 | 0.0200 | -1.833 | 0.410 | 2.996 |  1.998 |  1.940
+      40.0 |   537,625 | 27.01 | 0.0202 | -1.849 | 0.432 | 2.994 |  1.983 |  1.874
+      45.0 |   528,160 | 27.15 | 0.0200 | -1.576 | 0.478 | 3.000 |  1.994 |  1.996
+
+  Profile: NON-MONOTONE (local minimum at mean_lag≈20-25, bump at 30)
+  Global minimum at mean_lag=45.0 (rightmost point)
+  At mean_lag >= 30: k_co2 and gamma hit bounds -> unphysical regime
+
+  Note: loss at 20 (537,044) and 25 (536,832) are nearly identical — broad minimum
+  region before the profile jumps at 30 (580,088) then gradually descends again.
+  The bump at 30 is structural: the optimizer finds a different solution basin with
+  high pvo2 (33.85), high k_co2 (0.137), and wide kernel (cv=0.416).
+
+
+## Success Criteria Assessment
+
+   1. [Exp A] beta_s significantly nonzero:       PASS (1.9999, at bound)
+   2. [Exp A] RV#4 delta reduced from -15 bound:  FAIL (still -15.00)
+   3. [Exp A] Timing error avg < 4s:              FAIL (4.0s, tied not better)
+   4. [Exp B] cv interior (not at bound):          FAIL (0.100 at bound)
+   5. [Exp B] beta_g interior (not at bound):      PASS (0.384)
+   6. [Exp B] Timing error < 10s (v6.06 was 15.4): PASS (0.4s — dramatic improvement!)
+   7. [Exp B] Deltas nontrivial (max > 1):         PASS (max |delta|=12.67)
+   8. [Exp C] Physiology close to co-trained:       PASS (pvo2 diff=0.90, gamma diff=0.19)
+   9. [Exp C] tau_reoxy behavior:                   AT BOUND (30.0 -> recovery model inadequate)
+  10. [Profile] Non-monotone:                       PASS (bump at mean_lag=30)
+  11. [Exp C] R2(apnea) avg >= 0.85:               PASS (0.961)
+
+  Overall: 6 PASS, 3 FAIL, 2 informative
+
+
+## Analysis
+
+### What worked
+
+1. **Rebalanced sensor-only (Exp B) dramatically improved timing.** Average nadir timing
+   error dropped from 15.4s (v6.06 Exp C) to 0.4s. The key was adding a Huber timing
+   penalty (lambda_nadir=500) — v6.06's Exp C had NO timing penalty at all. With timing
+   guidance, the kernel+spline correctly places nadirs within 1s for all holds.
+
+2. **beta_g is interior in Exp B.** v6.06's Exp C had beta at its 2.0 bound. With
+   rebalanced penalties (lambda_shrink 300->30, lambda_beta 200->500), Exp B finds
+   beta_g=0.384 — small but nonzero, meaning the depth-severity effect is real but
+   weaker than v6.06 estimated. The deltas now absorb more of the per-hold variation
+   (as intended), with beta providing a modest baseline slope.
+
+3. **Physiology params are stable across experiments.** pvo2 differs by only 0.90
+   (21.78 vs 20.88) between Exp A and C, vs v6.06's 11.8 gap. gamma differs by 0.19
+   (1.46 vs 1.65). This suggests the sensor kernel from Exp B is much more compatible
+   with the physiology model than v6.06's, likely because the effective lags are more
+   reasonable (not all compressed by beta at bound).
+
+4. **Profile is non-monotone.** v6.06's profile was monotonically decreasing (degenerate).
+   v6.07 shows a flat region at mean_lag 20-25 (loss ~537k), then a clear bump at 30
+   (580k), before descending again at 35-45 with unphysical params. The bump at 30 is
+   a genuine structural feature: the optimizer transitions between solution basins.
+
+5. **Apnea-only physiology (Exp C) gives excellent apnea fits.** R2a avg = 0.961, with
+   individual holds ranging from 0.926 (FRC#2) to 0.995 (FL#6). By not fitting recovery,
+   the model focuses entirely on the desaturation dynamics, which is what we care about
+   for predicting dangerous SpO2 levels during breath-holds.
+
+6. **Latent splines remain physiologically plausible.** All start at 100%, show monotone
+   decrease during apnea, with nadir depths matching expectations. The min_shift feature
+   allows RV#3 and RV#4 to place their nadirs before t_end (m_h=-8.0s), consistent with
+   RV#4's observed nadir during apnea.
+
+### What didn't work
+
+1. **cv still at lower bound (0.100) in Exp B.** Same as v6.06 — the data prefers a
+   near-delta-function kernel when per-hold shifts are available. This means the kernel
+   shape parameter (cv) isn't identifiable from this data; only the mean delay matters.
+   The rebalancing didn't fix this because the issue is fundamental: with flexible deltas,
+   all timing variation can be absorbed by the shifts, leaving no role for kernel spread.
+
+2. **beta_s saturated in Exp A, negligible in Exp B.** In the co-trained model (Exp A),
+   beta_s=2.0 (at bound) — it's absorbing as much variation as the optimizer allows.
+   But in the sensor-only model (Exp B), beta_s=0.264 — barely used. This suggests the
+   slope covariate doesn't provide independent information beyond what the flexible splines
+   and deltas already capture. In the co-trained model, beta_s compensates for the
+   physiology model's inability to distinguish RV#4 from FRC#5.
+
+3. **RV#4 delta at bound in Exp A and C.** Despite adding the slope covariate, RV#4 still
+   needs delta=-15 (at bound) in both co-trained experiments. The fundamental problem
+   persists: RV#4's nadir occurs DURING apnea (delay=-5s) while the model expects
+   post-apnea nadirs. No linear covariate can fix this structural mismatch.
+
+4. **min_shift (m_h) at bound for RV#3 and RV#4.** Both want m_h << -8s, suggesting the
+   [-8, 8] bounds are too tight. These holds have early nadirs that the spline's fixed
+   knot structure can't capture within the allowed shift range.
+
+5. **tau_reoxy at bound (30s) in ALL experiments.** Same structural issue since v6.04.
+   The single-exponential recovery model with P_EQ=100 is too simple. Excluding recovery
+   from Exp C's loss confirms this: the apnea model works well (R2a=0.961), but recovery
+   is systematically wrong.
+
+6. **Profile minimum at 45 (rightmost) despite being non-monotone.** The local minimum
+   at 20-25 has loss ~537k, while 45 has 528k — so the global minimum is still at the
+   boundary. The non-monotonicity is encouraging but doesn't create a well-defined
+   interior minimum for mean_lag.
+
+### Comparison with v6.06
+
+  Metric            | v6.06 Exp B | v6.07 Exp A | v6.06 Exp C | v6.07 Exp B | v6.06 Exp D | v6.07 Exp C
+  ------------------|-------------|-------------|-------------|-------------|-------------|------------
+  Structure         | 1-cov co-tr | 2-cov co-tr | sensor-only | sensor-rebal| frozen phys | frozen apnea
+  mean_lag          | 15.96       | 15.88       | 15.77       | 15.53       | 15.77       | 15.53
+  cv                | 0.114       | 0.109       | 0.100*      | 0.100*      | 0.100*      | 0.100*
+  beta_g            | 1.389       | 1.096       | 2.000*      | 0.384       | 2.000*      | 0.384
+  beta_s            | N/A         | 2.000*      | N/A         | 0.264       | N/A         | 0.264
+  R2a avg           | 0.689       | 0.673       | 0.814       | 0.816       | 0.748       | 0.961
+  R2n avg           | 0.651       | 0.638       | 0.891       | 0.895       | 0.674       | 0.477
+  Timing err avg    | 4.0s        | 4.0s        | 15.4s       | 0.4s        | 4.4s        | 3.8s
+  pvo2 A-C diff     | N/A         | N/A         | N/A         | N/A         | 11.8        | 0.90
+  Profile monotone  | N/A         | non-monotone| N/A         | N/A         | N/A         | N/A
+  (* = at bound)
+
+  Key improvements:
+  - Timing: 15.4s -> 0.4s (sensor-only, adding Huber timing penalty)
+  - Physiology stability: pvo2 diff 11.8 -> 0.90 (frozen sensor now compatible)
+  - beta_g: 2.0 (bound) -> 0.384 (interior) in sensor-only
+  - Profile: monotone -> non-monotone (two covariates create structure)
+  - Apnea R2: 0.748 -> 0.961 (apnea-only loss window)
+
+### Key insights
+
+1. **Timing penalty is essential for sensor-only identification.** v6.06 omitted it,
+   hoping the kernel would self-identify timing from shape alone. It didn't — the spline
+   absorbed all timing information. Adding even a modest Huber timing penalty (lambda=500)
+   makes nadir locations nearly perfect (0.4s avg error).
+
+2. **With proper penalties, beta_g is small (0.38) not large (2.0).** v6.06's beta=2.0
+   was a penalty artifact: lambda_shrink=300 made deltas 30x more expensive than beta per
+   unit, forcing beta to saturation. With lambda_shrink=30 (10x less), deltas become
+   cheaper and absorb per-hold variation, leaving beta_g at its true (modest) value.
+   This suggests the depth-severity -> sensor lag relationship is real but weak (~0.4s
+   per unit severity, not ~2s).
+
+3. **The slope covariate helps the profile but not individual holds.** Adding beta_s
+   breaks the monotone profile (criterion 10: PASS) but doesn't reduce RV#4's delta
+   (criterion 2: FAIL). The slope difference between RV#4 (-s_h=0.2) and FRC#5 (-s_h=0.6)
+   is only 0.4 units — with beta_s≈2, that's only 0.8s of additional lag differentiation.
+   The actual lag difference needed is ~30s (7.2 vs 37.1). No reasonable covariate can
+   bridge that gap.
+
+4. **The RV#4 problem is structural, not a covariate problem.** RV#4's nadir occurs
+   during apnea (5s before end), while all other holds have post-apnea nadirs (10-35s
+   after end). This is a qualitatively different phenomenon — possibly splenic contraction
+   or a different desaturation mechanism — that cannot be captured by any lag model of the
+   form "latent SaO2 nadir at t_end, convolved with delay kernel."
+
+5. **Apnea-only fitting is the right approach for this data.** Exp C's R2a=0.961 shows
+   that the physiology+sensor model can accurately describe the desaturation phase. The
+   recovery phase is where the model breaks down (R2n=0.477). Since the clinical goal
+   is predicting dangerous SpO2 levels during breath-holds, apnea-only fitting is both
+   more accurate and more honest about what the model can and cannot explain.
+
+6. **The two-stage pipeline works when penalties are balanced.** v6.06's Exp D had a
+   pvo2 gap of 11.8 between co-trained and frozen-sensor fits. v6.07's gap is 0.90.
+   The key difference: Exp B now finds a more reasonable kernel (beta_g=0.38 not 2.0,
+   deltas doing the heavy lifting) that doesn't force the physiology to compensate.
+
+
+## Files
+
+  exp_v6_07_slope_rebalance.py             Experiment script
+  exp_v6_07_slope_rebalance.png            Per-hold detail plots (A, B, C overlaid)
+  exp_v6_07_kernel_shape.png               Gamma kernel impulse response shapes (A vs B)
+  exp_v6_07_latent.png                     Latent spline SaO2 with min_shift knots (Exp B)
+  exp_v6_07_mean_lag_profile.png           mean_lag profile sweep (9 points, two covariates)
+  exp_v6_07_results.txt                    This file
