@@ -1,0 +1,476 @@
+v7.03: Break the Plateau-Clipping Degeneracy - Results
+======================================================
+
+Date: 2026-03-10
+
+
+## Data Recap
+
+Subject: Thomas, healthy male, trained breath-holder
+Device: Viatom Checkme O2 Max pulse oximeter (finger sensor, 1Hz sampling)
+Session: 6 breath-hold apneas at varying lung volumes
+
+Hold Table:
+  #1 FL   178s apnea + 5 recovery pts   SpO2: 97-99%   [EXCLUDED: <2% variation]
+  #2 FRC  132s apnea + 48 recovery pts  SpO2: 78-98%   Nadir at t=151s (+17s post-apnea)
+  #3 RV   126s apnea + 49 recovery pts  SpO2: 52-98%   Nadir at t=139s (+10s post-apnea)
+  #4 RV   174s apnea + 56 recovery pts  SpO2: 41-98%   Nadir at t=168s (-5s, during apnea!)
+  #5 FRC  185s apnea + 60 recovery pts  SpO2: 41-98%   Nadir at t=222s (+35s post-apnea)
+  #6 FL   366s apnea + 38 recovery pts  SpO2: 52-98%   Nadir at t=394s (+22s post-apnea)
+
+Apnea-window nadir (NEW in v7.03): min SpO2 in [0, t_end+5]:
+  FRC#2: t=151s, SpO2=78   RV#3: t=129s, SpO2=61   RV#4: t=168s, SpO2=41
+  FRC#5: t=187s, SpO2=46   FL#6: t=372s, SpO2=52
+
+Note on RV#4: subject resumed breathing during the hold, so nadir occurs
+within the apnea window rather than post-apnea. This is the structural
+outlier across all model versions.
+
+Lung volume types:
+  FL  = Full Lungs (TLC): maximal O2 store, slowest desaturation
+  FRC = Functional Residual Capacity: moderate O2 store
+  RV  = Residual Volume: minimal O2 store, fastest desaturation
+
+Covariates:
+  Depth severity g_h = max(0, 95 - min(SpO2_obs)) / 10:
+    FRC#2: 1.70   RV#3: 4.30   RV#4: 5.40   FRC#5: 5.40   FL#6: 4.30
+
+  End-slope -s_h:
+    FRC#2: -0.000  RV#3: +0.900  RV#4: +0.200  FRC#5: +0.600  FL#6: +0.200
+
+
+## Full Model
+
+Architecture: Two-stage sensor-first model with piecewise-linear latent SaO2.
+
+### Stage A: Sensor Calibration (30 params for 5 holds)
+
+Latent curve:
+  S(t) = { S_start - v_down * t          for t <= t_turn
+          { S_min + v_up * (t - t_turn)    for t > t_turn
+  where t_turn = t_end + m_h, v_down = (S_start - S_min) / t_turn
+  Clipped to [0, 100] (physical SaO2 constraint).
+
+Sensor pipeline:
+  filtered = GammaKernel(latent, mean=eff_lag, cv=0.15)
+  pred = r_offset + b_s * filtered     <-- NO CLIP for loss (v7.03 core change)
+  pred_display = clip(pred, 0, 100)    <-- clip only for nadir timing/plotting
+  eff_lag = tau_0 + beta_g * g_h + beta_s * (-s_h) + delta_h
+
+Loss: Student-t NLL (nu=4, sigma=1) on raw (unclipped) predictions in
+nadir window [0, t_end+45]. Huber timing penalty (delta=8s, lambda=500)
+on clipped predictions (for physical argmin).
+
+Parameters (30 total):
+  Global (5): tau_0, r_offset, b_s, beta_g, beta_s
+  Per-hold deltas (5): delta_h
+  Per-hold nadir shifts (5): m_h
+  Per-hold latent (15): S_start_h, S_min_h, v_up_h (x5)
+
+Bounds:
+  tau_0: [5, 45]       r_offset: [-3, 3] (tightened from [-8,8])
+  b_s: [0.5, 2.0]     beta_g: [-2, 2]      beta_s: [-2, 2]
+  delta: [-15, 15]     m_h: [-15, 40]
+  S_start: [90, 100]   S_min: [30, 100]     v_up: [0, 3]
+
+Priors (MAP-correct: lambda = 1/(2*sigma^2)):
+  tau_0: LogNormal(log 18, 0.4), lambda=3.125
+  beta_g, beta_s: N(0, 2), lambda=0.125
+  delta: StudentT-like shrinkage, lambda=5.0
+  m_h: N(0, 8), lambda=0.0078
+  r_offset: N(0, 2), lambda=0.125
+  b_s: N(1, 0.1), lambda=50
+
+Optimizer: DE(popsize=40, maxiter=4000, seed=42, polish=True)
+
+### Stage B: Physiology (18 params, frozen sensor)
+
+SaO2(t) = ODC(PaO2(t), P50(t), gamma)
+pred = clip(r_offset + b_s * GammaKernel(SaO2, eff_lag, cv), 0, 100)
+
+Parameters (18):
+  Global (3): PvO2, k_CO2, gamma
+  Per-hold deltas (5): re-fitted
+  Per-hold ICs (10): tau_washout_h, PaCO2_0_h (x5)
+
+Apnea-only loss: weighted SSE in [0, t_end+5], 3x weight for SpO2 < 95.
+Optimizer: DE(popsize=25, maxiter=2000, seed=42, polish=True)
+
+
+## Changes from v7.02
+
+1. CORE: Removed clip from loss in all 4 objective functions (Stage A,
+   LOHO train, LOHO held-out, profile likelihood). NLL computed on raw
+   (unclipped) predictions. Clip retained only for nadir timing argmin,
+   plotting, and display metrics. This makes the plateau region informative:
+   S_start bounds [90,100] force b_s ~ 1.0 and r_offset ~ 0.
+
+2. LOHO-Inference: Added Phase 2b in LOHO where held-out hold gets delta
+   optimized (5D: m_h, S_start, S_min, v_up, delta_ho). Distinguishes
+   "covariates can't predict timing" from "model can't fit shape."
+
+3. Saturation diagnostic: After Stage A, counts % of 1Hz samples where
+   pred_raw > 100 per hold and overall.
+
+4. Stage B apnea-window observed nadir: uses min in [0, t_end+5] instead
+   of the wide-window nadir from compute_nadir_info() for Stage B metrics.
+
+5. Tightened r_offset bounds: (-8, 8) -> (-3, 3). Physical constraint:
+   calibrated finger pulse oximeters can't have 8-point systematic offset.
+
+
+## Results: Stage A
+
+Convergence: YES, fun=5458.73, nfev=3,600,099
+
+Fitted global params:
+  Param       |    Value  |    Bounds    | At Bound?
+  tau_0       |  34.0081  |  [5, 45]     |
+  r_offset    |   0.2355  |  [-3, 3]     |
+  b_s         |   1.0890  |  [0.5, 2.0]  |
+  beta_g      |  -1.9998  |  [-2, 2]     | YES
+  beta_s      |   1.9989  |  [-2, 2]     |
+
+Kernel: k=44.44, mean=34.0s, std=5.1s (cv=0.15 fixed)
+
+Per-hold breakdown:
+  Hold   | bg*g   | bs*(-s)| delta  | eff_lag| m_h    | S_start| S_min | v_up
+  FRC#2  | -3.40  | -0.00  | +1.24  | 31.85  | -15.0  | 91.7   | 79.3  | 0.07
+  RV#3   | -8.60  | +1.80  | -1.19  | 26.02  | -15.0  | 92.4   | 68.8  | 0.19
+  RV#4   | -10.80 | +0.40  | -15.00*| 8.61   | -15.0  | 98.8   | 61.1  | 0.01
+  FRC#5  | -10.80 | +1.20  | +14.99 | 39.40  | +4.1   | 92.6   | 64.5  | 1.38
+  FL#6   | -8.60  | +0.40  | -0.05  | 25.76  | +2.3   | 95.4   | 70.7  | 0.66
+  (* = at bound)
+
+Per-hold fit metrics:
+  Hold   |  R2a   |  R2n   | NadirErr
+  FRC#2  | 0.5779 | 0.6971 |  +0.0s
+  RV#3   | 0.7062 | 0.5586 |  +0.0s
+  RV#4   | 0.7079 | 0.7410 |  +0.0s
+  FRC#5  | 0.7039 | 0.5394 |  +0.0s
+  FL#6   | 0.6614 | 0.5924 |  +0.0s
+  Avg    | 0.6715 | 0.6257 |   0.0s
+
+Saturation diagnostic (pred_raw > 100):
+  FRC#2: 30/183 (16.4%), max=100.1
+  RV#3: 30/179 (16.8%), max=100.9
+  RV#4: 39/230 (17.0%), max=107.8
+  FRC#5: 45/248 (18.1%), max=101.0
+  FL#6: 83/411 (20.2%), max=104.1
+  Overall: 227/1251 (18.1%)
+
+
+## Results: Stage B
+
+Convergence: YES
+
+Fitted physiology params:
+  Param  |   Value  |    Bounds    | At Bound?
+  PvO2   |  15.0000 |  [15, 50]    | YES
+  k_CO2  |   0.0724 |  [0.02, 0.25]|
+  gamma  |   1.0737 |  [0.8, 1.3]  |
+
+Per-hold shifts:
+  FRC#2: delta=+12.48, eff_lag=43.09
+  RV#3:  delta=-15.00*, eff_lag=12.21
+  RV#4:  delta=-15.00*, eff_lag=8.61
+  FRC#5: delta=+15.00*, eff_lag=39.41
+  FL#6:  delta=+2.51, eff_lag=28.32
+
+Per-hold ICs:
+  FRC#2: tau_w=99.3, PaCO2_0=41.9, PaO2_0=96.8
+  RV#3:  tau_w=73.5, PaCO2_0=36.6, PaO2_0=103.4
+  RV#4:  tau_w=80.0*, PaCO2_0=34.8, PaO2_0=105.6  [tau_washout at upper bound]
+  FRC#5: tau_w=98.1, PaCO2_0=40.8, PaO2_0=98.2
+  FL#6:  tau_w=231.5, PaCO2_0=32.6, PaO2_0=108.4
+
+Per-hold fit metrics (apnea-window nadir for observed):
+  Hold   |  R2a   |  R2n   | NadirErr
+  FRC#2  | 0.8667 | 0.4261 | +17.0s
+  RV#3   | 0.9616 | 0.8342 |  +0.0s
+  RV#4   | 0.9282 | 0.4944 | +10.0s
+  FRC#5  | 0.9707 | 0.9827 |  +1.0s
+  FL#6   | 0.9914 | 0.9502 |  +0.0s
+  Avg    | 0.9437 | 0.7375 |   5.6s
+
+
+## v7.02 -> v7.03 Parameter Comparison
+
+  Param     | v7.02     | v7.03     | Direction
+  ----------+-----------+-----------+----------
+  tau_0     |   9.30    |  34.01    | +24.7 (freed from compensation)
+  r_offset  |  -8.00*   |   0.24    | +8.2 (degeneracy broken)
+  b_s       |   1.56    |   1.09    | -0.47 (toward 1.0)
+  beta_g    |  -2.00*   |  -2.00*   | unchanged (at bound)
+  beta_s    |  -1.47    |   2.00    | +3.47 (sign flip!)
+  gamma     |   0.80*   |   1.07    | +0.27 (freed from bound)
+  PvO2      |  15.02    |  15.00*   | ~0 (still at bound)
+  k_CO2     |   0.020*  |   0.072   | +0.052 (freed from bound)
+
+  * = at bound
+
+
+## Diagnostics: LOHO
+
+LOHO-Global (no delta for held-out):
+  Hold   |    R2  |   RMSE | NadirErr | EffLag
+  FRC#2  | 0.7201 |   3.97 |   +0.0s  |  9.4
+  RV#3   | 0.2822 |  15.57 |   +0.0s  | 27.2
+  RV#4   | 0.6303 |  11.66 |  +28.0s  | 46.5
+  FRC#5  | 0.5333 |  14.71 |   -2.0s  |  3.6
+  FL#6   | 0.5410 |  10.70 |   +0.0s  | 15.3
+  Avg |timing error|: 6.0s (target < 5s)
+
+LOHO-Inference (delta inferred for held-out):
+  Hold   |    R2  |   RMSE | NadirErr | EffLag | Delta
+  FRC#2  | 0.7201 |   3.97 |   +0.0s  |  9.4   |  +0.0
+  RV#3   | 0.2822 |  15.57 |   +0.0s  | 27.2   |  +0.0
+  RV#4   | 0.6303 |  11.66 |  +28.0s  | 46.5   |  +0.0
+  FRC#5  | 0.4961 |  15.29 |   +0.0s  | 14.3   | +10.7
+  FL#6   | 0.6158 |   9.79 |   +1.0s  | 30.3   | +15.0
+  Avg |timing error|: 5.8s
+
+LOHO-Inference interpretation:
+  FRC#2, RV#3, RV#4: delta=0.0, inference doesn't help. For RV#4 (+28s
+  timing error), this means the model family can't represent RV#4's shape
+  even with timing freedom. Shape issue, not timing issue.
+  FRC#5, FL#6: delta non-zero, inference shifts timing and improves R2 for
+  FL#6 but hurts FRC#5. These are timing issues that covariates miss.
+
+
+## Diagnostics: Time-Split
+
+Fit on [0, min(SpO2<95, 0.6*t_end)], predict rest to t_end+5.
+
+  Hold   | t_split |  R2_fit  |  R2_pred  | RMSE_pred
+  FRC#2  |   80s   | -22.6259 |    N/A    |    N/A     (drop=1.0%)
+  RV#3   |   77s   |  -0.9201 |  -0.7832  |   17.58
+  RV#4   |   77s   |   0.2572 |  -0.9338  |   24.63
+  FRC#5  |  106s   |   0.5320 |  -0.9509  |   18.41
+  FL#6   |  218s   |   0.7311 |  -1.2134  |   17.85
+  Avg R2_pred: -0.9703 (target > 0.90)
+
+Time-split is catastrophic. The frozen sensor (tau_0=34s) combined with
+beta_g/beta_s at bounds creates a rigid pipeline that can't extrapolate
+from early (flat) data to late (desaturation) data.
+
+
+## Diagnostics: Profile Likelihood
+
+Profile loss vs fixed tau_0:
+  tau_0 |    loss  | r_offset |    b_s   | beta_g  | beta_s
+    5.0 |  5776.73 |  -2.4796 |   1.1384 |  1.9980 | -1.9558
+    8.0 |  5818.43 |   2.9187 |   1.0765 |  0.9910 | -0.2251
+   10.0 |  5818.00 |  -2.8793 |   1.1498 | -1.2051 |  1.8378
+   12.0 |  5745.91 |  -1.9977 |   1.1300 |  0.9030 |  1.9705
+   14.0 |  5665.37 |   2.8490 |   1.0531 |  1.7271 |  1.9615
+   16.0 |  5766.25 |   1.0944 |   1.0988 |  0.0699 |  1.4468
+   18.0 |  5739.57 |   2.7415 |   1.0507 |  0.9738 |  1.9327
+   20.0 |  5749.94 |   1.6761 |   1.0665 |  0.6278 |  1.6975
+   22.0 |  5687.75 |   2.2844 |   1.0546 |  0.1364 |  1.5340
+   25.0 |  5678.14 |   0.9673 |   1.1003 | -0.2905 |  1.9080
+   30.0 |  5676.29 |   2.7738 |   1.0515 | -1.2668 |  1.9702
+   35.0 |  5641.66 |  -0.4802 |   1.1063 | -1.9995 | -0.7101
+   40.0 |  6063.31 |   1.2382 |   1.0149 | -1.9975 | -0.9898
+   45.0 |  6396.57 |  -1.6815 |   1.0835 | -1.3791 |  1.8666
+
+Non-monotone: YES (good)
+Minimum at tau_0=35.0
+Profile depth: 13.4% (target > 15%)
+
+Key observation: b_s stays in [1.01, 1.15] across all tau_0 values. The
+clip fix successfully constrains b_s near 1.0 regardless of tau_0. However,
+r_offset and beta_g/beta_s vary wildly, indicating remaining degeneracies
+among those parameters. The profile is non-monotone but noisy/rugged rather
+than smooth, suggesting the landscape has multiple local minima.
+
+
+## Diagnostics: Sensitivity
+
+d(physiology)/d(tau_0) at tau_0 = [25, 30, 35, 40, 45]:
+  d(PvO2)/d(tau_0):  max |deriv| = 0.0000  (PvO2 pinned at 15)
+  d(k_CO2)/d(tau_0): max |deriv| = 0.0014  (very low)
+  d(gamma)/d(tau_0): max |deriv| = 0.0062  (very low)
+
+Sensitivity is dramatically lower than v7.02 (which had PvO2 12x worse).
+With b_s ~1.0 and r_offset ~0, the sensor calibration is much less
+distorted, so Stage B physiology is less sensitive to tau_0 choice.
+
+
+## Diagnostics: Sponge
+
+Stage A:
+  Param    | Value    | At Bound | Contraction
+  tau_0    | 34.0081  |          | 0.020
+  r_offset |  0.2355  |          | 0.667
+  b_s      |  1.0890  |          | 0.133
+  beta_g   | -1.9998  |   YES    | 1.000
+  beta_s   |  1.9989  |          | 1.000
+  Total at bound: 1/5
+
+Stage B:
+  Param  | Value    | At Bound | Contraction
+  PvO2   | 15.0000  |   YES    | 0.286
+  k_CO2  |  0.0724  |          | 0.174
+  gamma  |  1.0737  |          | 0.600
+  Total at bound: 1/3
+
+Hold influence (from LOHO):
+  FRC#2: loss=5346.30 (influence=+17.8%)
+  RV#3:  loss=4637.47 (influence=+2.2%)
+  RV#4:  loss=4417.99 (influence=-2.7%)
+  FRC#5: loss=4515.54 (influence=-0.5%)
+  FL#6:  loss=3776.12 (influence=-16.8%)
+
+
+## Success Criteria
+
+  #  | Criterion                              | Result       | Status
+  ---+----------------------------------------+--------------+-------
+  1  | r_offset in (-2, 2)                    | 0.24         | PASS
+  2  | b_s in (0.8, 1.2)                      | 1.09         | PASS
+  3  | Stage A timing error < 1s              | 0.0s         | PASS
+  4  | LOHO timing error < 5s                 | 6.0s         | FAIL
+  5  | Profile depth > 15%                    | 13.4%        | FAIL
+  6  | gamma interior of [0.8, 1.3]           | 1.07         | PASS
+  7  | Saturation < 5%                        | 18.1%        | FAIL
+  8  | LOHO timing < 5s (regression)          | 6.0s         | FAIL
+  9  | Stage B R2(apnea) >= 0.95              | 0.94         | FAIL
+  10 | Profile non-monotone                   | YES          | PASS
+  11 | Params at bounds                       | 2            | OK
+
+  Summary: 5 PASS, 5 FAIL, 1 OK
+
+
+## Analysis
+
+### What Worked
+
+1. DEGENERACY BROKEN: r_offset = 0.24 (was -8.0), b_s = 1.09 (was 1.56).
+   The core fix worked exactly as predicted. Removing the clip made the
+   plateau informative, and S_start bounds [90,100] force the measurement
+   equation to honesty: r_offset + b_s * 98 ~ 98, not 132 clipped to 100.
+
+2. tau_0 FREED: 34.0s (was 9.3s). No longer pulled down to compensate for
+   the inflated b_s. This is physiologically more plausible for a gamma
+   kernel with cv=0.15 (spread ~5s around the mean).
+
+3. gamma FREED: 1.07 interior (was 0.80 at bound). With honest sensor
+   calibration (b_s ~1, r_offset ~0), the physiology model doesn't need
+   to distort gamma to compensate for sensor artifacts.
+
+4. k_CO2 FREED: 0.072 (was 0.020 at bound). Same mechanism as gamma.
+
+5. SENSITIVITY MUCH LOWER: d(PvO2)/d(tau_0) = 0.0 (was large in v7.02).
+   Honest sensor calibration decouples the stages much better.
+
+6. PROFILE NON-MONOTONE with clear minimum at tau_0=35, consistent with
+   the fitted value of 34. The landscape has a genuine basin.
+
+### What Didn't Work
+
+1. STAGE A R2 DROPPED: 0.67 avg (was 0.93 in v7.02). Expected: the model
+   can no longer "cheat" with clipping. But the drop is larger than ideal.
+   The piecewise-linear latent + gamma kernel may lack the flexibility to
+   accurately match the plateau region when forced to be honest.
+
+2. SATURATION STILL HIGH (18.1%): With b_s=1.09 and S_start~92-98,
+   pred_raw = 0.24 + 1.09*95 ~ 103.8. The slight gain > 1 means any
+   filtered value above ~91.5 produces pred_raw > 100. The model is
+   slightly overestimating the plateau, causing systematic saturation.
+
+3. BETA_G, BETA_S AT BOUNDS: The covariates are hitting [-2, 2] bounds.
+   With tau_0=34, the covariates produce shifts of -10.8 to +1.8 from
+   beta_g alone. The model is using covariates to create a huge range of
+   effective lags (8.6 to 39.4), which is structurally questionable.
+
+4. m_h AT -15 FOR 3/5 HOLDS: FRC#2, RV#3, RV#4 all push m_h to the lower
+   bound, meaning the latent nadir is placed at t_end-15, well before
+   apnea ends. This may indicate the kernel smoothing (tau_0=34s) is too
+   slow and needs the nadir earlier to produce the right output timing.
+
+5. PvO2 AT LOWER BOUND (15): The physiology model can't find a good PvO2
+   within [15, 50] with the frozen sensor. May need wider bounds or
+   indicates a Stage A -> Stage B interaction problem.
+
+6. TIME-SPLIT CATASTROPHIC (R2 = -0.97): The frozen sensor pipeline with
+   tau_0=34s and saturated covariates creates a rigid system that can't
+   extrapolate from early (flat plateau) to late (desaturation). This is
+   the most concerning result and suggests the overall fit is fragile.
+
+7. RV#4 LOHO +28s: LOHO-Inference shows delta=0.0 for RV#4, confirming
+   this is a shape issue (model family can't represent it), not timing.
+
+### Key Insights
+
+The clip fix achieved its primary goal: breaking the 3-way degeneracy
+between r_offset, b_s, and tau_0. The sensor parameters are now
+physiologically interpretable. However, the fix exposed secondary issues:
+
+1. tau_0=34s with cv=0.15 means the kernel peaks at ~34s with std ~5s.
+   This is quite slow, pushing m_h to -15 bounds to compensate. The
+   model may need either wider m_h bounds or smaller tau_0 to be more
+   flexible.
+
+2. Beta_g/beta_s at bounds with tau_0=34 creates eff_lag range of [8.6,
+   39.4] - a 4.6x spread. This is driven by the large base tau_0 needing
+   big negative shifts for fast holds (RV). The covariate model is
+   over-stretched.
+
+3. The 18% saturation means the model is penalized for plateau predictions
+   (pred_raw ~ 101-108), which pulls fit quality down. This is honest
+   (the model is admitting it can't perfectly match the plateau with
+   b_s=1.09 and the current latent), but it consumes loss budget.
+
+### Comparison Table: v7.02 vs v7.03
+
+  Metric               | v7.02  | v7.03  | Direction
+  ---------------------+--------+--------+----------
+  r_offset             | -8.00  |  0.24  | FIXED
+  b_s                  |  1.56  |  1.09  | FIXED
+  tau_0                |  9.3   | 34.0   | freed
+  gamma                |  0.80* |  1.07  | freed
+  R2a (Stage A avg)    |  0.93  |  0.67  | worse
+  R2a (Stage B avg)    |  0.97  |  0.94  | worse
+  LOHO timing          |  3.4s  |  6.0s  | worse
+  Profile depth        |  4%    | 13.4%  | better
+  Sensitivity PvO2     | large  | 0.000  | much better
+  Time-split R2        |  N/A   | -0.97  | catastrophic
+  Saturation           | ~100%  | 18.1%  | much better
+
+### Recommended Next Steps
+
+1. WIDEN m_h BOUNDS to [-30, 40]: Three holds are at -15 bound. The kernel
+   with tau_0=34 needs earlier nadir placement. This is the lowest-risk
+   change that could improve Stage A R2 significantly.
+
+2. WIDEN BETA BOUNDS or ADD MORE COVARIATES: Both beta_g and beta_s are
+   saturated. Either widen to [-5, 5] or add lung-volume-specific
+   intercepts to reduce reliance on continuous covariates.
+
+3. INVESTIGATE b_s PRIOR TENSION: b_s=1.09 with N(1, 0.1) prior. The
+   prior is pulling toward 1.0 while the data wants ~1.09. The 18%
+   saturation comes partly from this. Consider weakening the gain prior
+   to N(1, 0.15) (lambda=22.2).
+
+4. LOWER PvO2 BOUND: PvO2=15 at bound. Consider [10, 50] to let the
+   physiology model find a better solution.
+
+5. CONSIDER cv AS FREE PARAMETER: With tau_0=34s, cv=0.15 gives std=5.1s.
+   The model might benefit from a narrower or wider kernel. Even a small
+   grid search over cv in [0.10, 0.15, 0.20] could be informative.
+
+6. FIX TIME-SPLIT: The catastrophic time-split result needs investigation.
+   It may be an artifact of the frozen sensor's high tau_0 creating a
+   system that can't be identified from early-apnea data alone.
+
+
+## Files
+
+  exp_v7_03_unclip.py       - Script (~2160 lines)
+  exp_v7_03_results.txt     - This file
+  exp_v7_03_stage_a.png     - Stage A per-hold detail plots
+  exp_v7_03_stage_b.png     - Stage B per-hold detail plots
+  exp_v7_03_loho.png        - LOHO summary bar chart
+  exp_v7_03_profile.png     - Profile likelihood plots
+  exp_v7_03_sensitivity.png - Sensitivity bar chart
