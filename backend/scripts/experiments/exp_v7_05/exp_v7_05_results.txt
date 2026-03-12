@@ -1,0 +1,493 @@
+v7.05 Results: Power-Law Descent + Baseline-Locked Sensor Model
+================================================================
+
+Date: 2026-03-12
+Script: backend/scripts/experiments/exp_v7_05/exp_v7_05_powerlaw.py
+
+
+1. DATA RECAP
+-------------
+
+Subject: Single subject, finger pulse oximetry.
+Device: Masimo MightySat (1-Hz SpO2, HR).
+Session: 1 session, 6 breath-holds (FL#1 excluded: only 2% SpO2 variation).
+5 holds used for fitting: FRC#2, RV#3, RV#4, FRC#5, FL#6.
+
+Hold table:
+  FRC#2: t_end=134s, nadir at t=151s (SpO2=78%, recovery), apnea-window nadir t=122s
+  RV#3:  t_end=129s, nadir at t=139s (SpO2=52%, recovery), apnea-window nadir t=134s
+  RV#4:  t_end=173s, nadir at t=168s (SpO2=41%, apnea), apnea-window nadir t=168s
+  FRC#5: t_end=187s, nadir at t=222s (SpO2=41%, recovery), apnea-window nadir t=191s
+  FL#6:  t_end=372s, nadir at t=394s (SpO2=53%, recovery), apnea-window nadir t=377s
+
+Lung volumes: FL = Functional Lung (tidal), FRC = Functional Residual Capacity,
+              RV = Residual Volume.
+
+QC flags: FRC#2 and RV#4 flagged as "out-of-regime" (apnea-window nadir before
+t_end - 2s, meaning the desaturation nadir occurs during apnea rather than post-apnea).
+These holds are kept in training but reported separately.
+
+Baseline anchors: B_h = median(SpO2[t <= 20]) = 99.0 for all 5 holds.
+S_start is now locked to B_h by construction (not fitted).
+
+Data points: ~1251 (apnea + recovery, 1-Hz).
+Recovery: up to 90s post-apnea, capped at SpO2 >= 97%.
+
+
+2. FULL MODEL
+-------------
+
+Two-stage model: sensor calibration (Stage A) then physiology (Stage B).
+
+Stage A - Power-law latent + gamma kernel sensor model:
+  Latent SaO2(t):
+    if t <= t_turn:  latent(t) = S_min + (S_start - S_min) * (1 - (t/t_turn)^p)
+    if t > t_turn:   latent(t) = S_min + v_up * (t - t_turn)
+    where t_turn = t_end (m_h = 0 by design), S_start = B_h (locked)
+
+  Properties: latent(0) = S_start = B_h, latent(t_turn) = S_min.
+  For p > 1, derivative at t=0 is zero (natural plateau), descent accelerates.
+  p is a global parameter controlling curvature shape.
+
+  Sensor pipeline:
+    filtered(t) = GammaKernel(latent, eff_lag, cv=0.15)
+    pred(t) = B_h + b_s * (filtered(t) - B_h)
+    eff_lag_h = max(tau_0 + delta_h, 5.0)
+
+  Baseline-corrected measurement equation ensures pred = B_h at plateau
+  regardless of b_s. No more r_offset.
+
+  18 parameters (5 holds):
+    Global (3): tau_0, b_s, p
+    Per-hold deltas (5): delta_h
+    Per-hold latent (10): S_min_h, v_up_h (x5)
+
+  Loss: Student-t NLL (nu=4, sigma=1) on raw (unclipped) predictions
+        + Huber nadir timing penalty (delta=8s, lambda=500) on clipped predictions
+
+  Priors:
+    tau_0: LogNormal(log 18, 0.4), lambda=3.125
+    b_s: N(1, 0.1), lambda=50
+    p: LogNormal(log 2, 0.35), lambda=4.08
+    delta_h: StudentT-like shrinkage (sigma=3), lambda=5
+    delta zero-sum: lambda=500
+
+  Bounds:
+    tau_0: [5, 45], b_s: [0.5, 2.0], p: [1.0, 5.0]
+    delta_h: [-20, 20]
+    S_min: [30, 100], v_up: [0, 3]
+
+  Optimizer: DE popsize=40, maxiter=4000, seed=42, polish=True
+
+Stage B - Apnea-only physiology (frozen sensor):
+  PaO2(t) = PvO2 + (PaO2_0 - PvO2) * exp(-t / tau_washout)
+  P50(t) = 26.6 + 0.48 * (PaCO2_0 + k_CO2*t - 40)
+  SaO2 = Severinghaus ODC with gamma steepness
+  pred(t) = clip(B_h + b_s * (GammaKernel(SaO2, eff_lag, cv) - B_h), 0, 100)
+
+  PvO2 fixed at 25.0 mmHg (was always at lower bound in v7.04).
+  17 parameters: k_co2, gamma + 5 deltas + 5*(tau_washout, paco2_0)
+
+
+3. CHANGES FROM v7.04
+---------------------
+
+1. Power-law descent replaces piecewise-linear. Global parameter p controls
+   curvature. For p > 1, the derivative at t=0 is zero (natural plateau), then
+   descent accelerates toward the nadir. This decouples latent shape from sensor
+   delay, so the kernel doesn't need to act as a per-hold shape knob.
+
+2. S_start locked to B_h = median(SpO2[t<=20]) by construction. Removed from
+   parameter vector. Eliminates baseline ambiguity entirely.
+
+3. r_offset removed. Measurement equation is now baseline-corrected:
+   pred = B_h + b_s * (filtered - B_h). Pred = B_h at plateau regardless of b_s.
+   Saturation eliminated by construction.
+
+4. m_h removed (fixed at 0). t_turn = t_end for all holds. With the power-law
+   providing curvature, nadir delay is carried by the kernel (tau_0 + delta_h).
+
+5. EFF_LAG_MIN = 5.0s floor (was 1.0s). With curvature handling shape, the
+   kernel shouldn't need to degenerate to a delta function.
+
+6. PvO2 fixed at 25.0 mmHg in Stage B (was free, always at lower bound 15.0).
+   Uninformative parameter removed.
+
+7. p profile likelihood added alongside tau_0 profile. Shows identifiability
+   of the curvature parameter.
+
+Parameter reduction: Stage A 28 -> 18 (-10), Stage B 18 -> 17 (-1).
+~1251 data points / 18 params = ~69 points per param (was ~45 in v7.04).
+
+
+4. RESULTS - STAGE A
+---------------------
+
+Convergence: Did not converge (fun=2753.96, nfev=2,881,119)
+
+Global params:
+    tau_0  =  15.0132  [  5.00,  45.00]
+    b_s    =   1.7503  [  0.50,   2.00]
+    p      =   3.5219  [  1.00,   5.00]
+
+  Kernel: k=44.44, mean=15.0s, std=2.3s (cv=0.15 FIXED)
+
+Per-hold breakdown (base tau_0=15.01, p=3.522):
+  FRC#2: delta= +0.11, eff_lag= 15.13, B_h=99.0, S_min=87.2, v_up=0.04 [QC-FLAGGED]
+  RV#3:  delta= -5.87, eff_lag=  9.14, B_h=99.0, S_min=71.9, v_up=0.15
+  RV#4:  delta=-10.01, eff_lag=  5.00, B_h=99.0, S_min=30.0, v_up=1.48 *FLOOR* [QC-FLAGGED]
+  FRC#5: delta= +5.56, eff_lag= 20.57, B_h=99.0, S_min=65.2, v_up=0.00
+  FL#6:  delta=+10.21, eff_lag= 25.22, B_h=99.0, S_min=66.3, v_up=1.20
+
+Per-hold metrics (Stage A):
+  Hold          R2a      R2n     NadirErr
+  FRC#2 [QC]    0.9306   0.9138   +0.0s
+  RV#3          0.9661   0.9723   +0.0s
+  RV#4  [QC]    0.5040  -0.6139   +0.0s
+  FRC#5         0.9543   0.9826   +0.0s
+  FL#6          0.9907   0.9759   +0.0s
+  Avg (all)     0.8692   0.6461    0.0s
+  Avg (QC-pass) 0.9704   0.9769    0.0s
+
+Saturation diagnostic (pred_raw > 100):
+  FRC#2: 0/183  (0.0%), max=99.0
+  RV#3:  0/179  (0.0%), max=99.0
+  RV#4:  5/230  (2.2%), max=100.8
+  FRC#5: 0/248  (0.0%), max=99.0
+  FL#6:  0/411  (0.0%), max=99.0
+  Overall: 5/1251 (0.4%)
+
+
+5. RESULTS - STAGE B (FROZEN-LAG)
+----------------------------------
+
+Convergence: True (fun=30991.38, nfev=841,554)
+
+Physiology params:
+    pvo2   =  25.0000  [FIXED]
+    k_co2  =   0.0625  [  0.02,   0.25]
+    gamma  =   1.3000  [  0.80,   1.30] ** AT BOUND **
+
+Per-hold shifts:
+  FRC#2: delta=+14.39, eff_lag= 29.41
+  RV#3:  delta=-20.00, eff_lag=  5.00
+  RV#4:  delta=-20.00, eff_lag=  5.00
+  FRC#5: delta=+20.00, eff_lag= 35.01
+  FL#6:  delta= +5.61, eff_lag= 20.62
+
+Per-hold ICs:
+  FRC#2: tau_w=72.1, paco2_0=27.3, PaO2_0=115.1
+  RV#3:  tau_w=66.1, paco2_0=30.7, PaO2_0=110.8
+  RV#4:  tau_w=71.5, paco2_0=30.0, PaO2_0=111.7  [paco2_0=lo]
+  FRC#5: tau_w=71.0, paco2_0=29.2, PaO2_0=112.7
+  FL#6:  tau_w=188.0, paco2_0=23.9, PaO2_0=119.3
+
+Per-hold metrics (Stage B):
+  Hold           R2a      R2n     NadirErr
+  FL#1 (excl) [QC] -2.2513 -1.4079  +11.0s
+  FRC#2 [QC]    0.9277   0.5597  +17.0s
+  RV#3          0.9086   0.7835   +0.0s
+  RV#4  [QC]    0.9377   0.2960  +10.0s
+  FRC#5         0.9809   0.9741   +1.0s
+  FL#6          0.9943   0.9207   +0.0s
+  Avg (all fit) 0.9498   0.7068    5.6s
+  Avg (QC-pass) 0.9613   0.8928    0.3s
+
+
+6. RESULTS - STAGE B (WEAK-LAG)
+---------------------------------
+
+Physiology params:
+    pvo2   =  25.0000  [FIXED]
+    k_co2  =   0.0565  [  0.02,   0.25]
+    gamma  =   1.3000  [  0.80,   1.30] ** AT BOUND **
+
+Frozen-lag vs Weak-lag comparison:
+  Param      Frozen      Weak     Diff%
+  k_co2       0.0625    0.0565      9.6%
+  gamma       1.3000    1.3000      0.0%
+
+Max physiology divergence: 9.6% (target < 20%: PASS)
+Conclusion: Physiology estimates are stable under timing perturbation, though
+the k_co2 divergence (9.6%) is larger than v7.04's 0.4%. Still well within
+the 20% target. gamma is locked at its upper bound in both modes.
+
+
+7. LOHO CROSS-VALIDATION
+--------------------------
+
+LOHO-Global (no delta for held-out):
+  Hold       R2       RMSE    NadirErr   EffLag
+  FRC#2     0.9129    2.21     +0.0s      15.0
+  RV#3     -0.7581   24.36     +0.0s      16.5
+  RV#4     -1.0768   27.63     +0.0s      17.7
+  FRC#5     0.9918    1.95    -13.0s      13.5
+  FL#6      0.9501    3.53     -2.0s      12.3
+  Avg |timing error|: 3.0s (target < 5s: PASS)
+
+LOHO-Inference (delta inferred for held-out):
+  Hold       R2       RMSE    NadirErr   EffLag   Delta
+  FRC#2     0.9134    2.21     +0.0s      15.1    +0.1
+  RV#3      0.9719    3.08     +0.0s       9.4    -7.1
+  RV#4     -1.0751   27.62     +0.0s      17.6    -0.0
+  FRC#5     0.9776    3.22     +0.0s      20.6    +7.1
+  FL#6      0.9681    2.82     +0.0s      25.3   +13.0
+  Avg |timing error|: 0.0s
+
+LOHO-Global timing: 3.0s (PASS, target < 5s). FRC#5 has a -13s error, meaning
+the model predicts the nadir 13s too early without per-hold delta. This suggests
+FRC#5's long effective lag (20.6s) is essential for correct timing.
+
+LOHO-Inference: All timing errors are 0.0s. R2 is excellent for 4/5 holds
+(0.91-0.97). RV#4 is the outlier at R2=-1.08, consistent with it being QC-flagged
+(nadir during apnea, structurally different from the post-apnea model).
+
+Compared to v7.04: LOHO-Inference R2 improved dramatically for RV#3 (from -0.28
+to 0.97) and FRC#2 (from 0.67 to 0.91). The power-law latent shape transfers
+much better across holds than the linear model did.
+
+
+8. TIME-SPLIT
+--------------
+
+Fit on [0, min(SpO2<95, 0.6*t_end)], predict rest to t_end+5.
+
+  Hold     R2_fit      R2_pred     RMSE_pred
+  FRC#2   -16.17       N/A (1.0% drop)
+  RV#3     -0.49      -0.34        15.24
+  RV#4      0.39       0.10        16.82
+  FRC#5     0.62      -0.06        13.58
+  FL#6      0.79      -0.04        12.23
+
+Avg R2_pred: -0.09 (target > 0.90: FAIL)
+
+Time-split R2 improved slightly from v7.04's -0.94 to -0.09, but still negative.
+The physiology model cannot extrapolate from early apnea to late apnea. This is
+consistent with v7.03 and v7.04; the physiology model's Severinghaus ODC is too
+rigid for this data.
+
+
+9. PROFILE LIKELIHOOD
+----------------------
+
+tau_0 profile:
+  tau_0   loss        b_s       p
+   5.0    5101.77    1.757    3.594
+   8.0    5087.99    1.756    3.576
+  10.0    5077.25    1.756    3.576
+  12.0    2771.13    1.751    3.528
+  14.0    2758.46    1.750    3.523   <-- minimum
+  16.0    2776.71    1.803    3.496
+  18.0    2931.58    2.000    3.446
+  20.0    3032.22    1.822    3.398
+  22.0    3149.11    2.000    3.286
+  25.0    4248.71    2.000    2.763
+  30.0    4105.69    1.959    3.275
+  35.0    8075.63    2.000    1.764
+  40.0    9199.62    2.000    1.335
+  45.0    9667.38    2.000    1.049
+
+Non-monotone: YES (good!)
+Minimum at tau_0 = 14.0. Clear minimum with steep rise beyond tau_0 = 22.
+Sharp transition between tau_0=10 and tau_0=12 (loss drops from 5077 to 2771),
+suggesting a structural bifurcation in the solution.
+
+p profile:
+  p       loss        tau_0     b_s
+  1.00    7675.04    33.392    2.000
+  1.20    7304.20    29.698    1.890
+  1.50    6360.77    26.718    1.968
+  2.00    5144.88    25.842    2.000
+  2.50    3948.08    21.697    1.913
+  3.00    3196.48    19.340    1.718
+  4.00    2890.55    14.947    1.797   <-- minimum
+  5.00    3509.88    14.894    1.901
+
+Non-monotone: YES (good!)
+Minimum at p = 4.0. Curvature is identifiable. The loss monotonically decreases
+from p=1 to p=4, then rises at p=5. This confirms that the power-law shape
+provides meaningful structure that the linear model (p=1) cannot.
+
+Note the strong p-tau_0 trade-off: as p increases (sharper descent), tau_0
+decreases (less delay needed). At p=1.0 (linear), tau_0=33.4 (similar to
+v7.03's inflated tau_0). At p=4.0, tau_0=14.9 (near the optimum).
+
+
+10. SENSITIVITY
+----------------
+
+d(k_co2)/d(tau_0): max |deriv| = 0.0014
+d(gamma)/d(tau_0): max |deriv| = 0.0000
+
+Very low sensitivity. Physiology estimates are robust to tau_0 changes.
+gamma is stuck at the upper bound across all tau_0 values (deriv = 0).
+
+
+11. SPONGE DIAGNOSTICS
+------------------------
+
+Stage A:
+  tau_0     15.0132  [5, 45]    contraction=0.020  (well constrained)
+  b_s        1.7503  [0.5, 2]   contraction=0.133  (poorly constrained)
+  p          3.5219  [1, 5]     contraction=0.175  (ok)
+  Total at bound: 0/3
+
+Stage B:
+  k_co2      0.0625  [0.02, 0.25]  contraction=0.174
+  gamma      1.3000  [0.8, 1.3]    AT BOUND   contraction=0.600
+  Total at bound: 1/2
+
+Hold influence (from LOHO train losses):
+  FRC#2: loss=2581.75 (influence=+17.9%)
+  RV#3:  loss=2505.69 (influence=+14.4%)
+  RV#4:  loss=1242.18 (influence=-43.3%)
+  FRC#5: loss=2336.81 (influence=+6.7%)
+  FL#6:  loss=2285.66 (influence=+4.3%)
+
+RV#4 has very large negative influence (-43.3%), meaning removing it dramatically
+reduces the loss. This is consistent with RV#4 being the structural outlier (nadir
+during apnea, QC-flagged). When RV#4 is in the training set, the model compromises
+to fit its unusual shape, degrading fits on other holds.
+
+
+12. SUCCESS CRITERIA
+---------------------
+
+ # Criterion                              Result    Status
+ 1 b_s in (0.8, 1.2)                      1.75      FAIL
+ 2 tau_0 in [10, 30]                       15.0      PASS
+ 3 p in [1.5, 3.5]                         3.52      FAIL (borderline, ~ok if identifiable)
+ 4 Saturation < 5%                         0.4%      PASS (huge improvement from 17.6%)
+ 5 Deltas not at bounds                    0/5       PASS
+ 6 Delta range < 15s                       20.2s     FAIL
+ 7 eff_lag > 5.0 for all                   5.0-25.2  FLOOR BINDING on RV#4
+ 8 LOHO-Global |timing| < 5s              3.0s      PASS
+ 9 LOHO-Inference R2 >= 0.5 all            FAIL (RV#4 = -1.08)
+10 tau_0 profile non-monotone              YES       PASS
+11 p profile non-monotone                  YES       PASS
+12 Frozen vs weak-lag < 20%               9.6%      PASS
+13 gamma interior                          1.30      FAIL (at bound)
+14 Global params at bounds (Stage A)       0/3       PASS
+15 QC-passing avg R2n=0.98, |timing|=0.0s           PASS
+
+Score: 9/15 PASS, 6 FAIL (of which 3 involve QC-flagged RV#4)
+
+
+13. ANALYSIS
+-------------
+
+What worked:
+  - Baseline-corrected measurement equation eliminated saturation: 0.4% vs 17.6%.
+    The pred = B_h + b_s*(filtered - B_h) form guarantees pred = B_h at plateau.
+    This was the single biggest improvement.
+
+  - Power-law curvature is identifiable. Both tau_0 and p profiles are non-monotone
+    with clear minima (tau_0=14, p=4). The curvature parameter provides real
+    structural information that the linear model could not.
+
+  - LOHO-Inference R2 dramatically improved for QC-passing holds:
+    RV#3: -0.28 -> 0.97, FRC#2: 0.67 -> 0.91, FRC#5: 0.54 -> 0.98, FL#6: 0.62 -> 0.97.
+    The power-law shape transfers across holds much better than linear.
+
+  - Stage A fit quality improved: QC-passing R2a avg 0.97 (was 0.57), R2n avg 0.98
+    (was 0.68). The power-law captures the "plateau then rapid descent" shape that
+    the linear model missed entirely.
+
+  - Nadir timing is perfect: 0.0s for all 5 holds in Stage A (was 1.0s avg in v7.04).
+    LOHO-Inference timing also 0.0s.
+
+  - tau_0 stabilized at 15.0s (vs 17.3 in v7.04). With the power-law absorbing
+    shape, tau_0 is free to represent pure sensor delay.
+
+  - Weak-lag diagnostic: 9.6% max divergence (still PASS, target < 20%).
+
+  - Parameter efficiency: 18 params vs 28 in v7.04 (-36%), with better fits.
+
+What didn't work:
+  - b_s = 1.75, far from the ideal 1.0. The baseline-corrected equation makes b_s
+    a gain around baseline. b_s > 1 means the model amplifies the deviation from
+    baseline. This suggests the gamma kernel attenuates the SpO2 deviation too much,
+    and b_s compensates. The power-law descent may be too smooth relative to the
+    actual data, forcing b_s up to match the observed depth.
+
+  - Delta range = 20.2s (eff_lag 5.0-25.2), still too wide. RV#4 hits the 5.0s
+    floor, while FL#6 has 25.2s. The 5x ratio is better than v7.04's 37x but
+    still indicates the single-tau_0 model cannot capture the per-hold delay
+    variation with deltas alone.
+
+  - RV#4 remains an outlier: R2n = -0.61 in Stage A, R2 = -1.08 in LOHO-Inference.
+    The structural issue (nadir during apnea rather than post-apnea) makes it
+    incompatible with the model's assumption of post-apnea nadir. Consider
+    excluding it in future versions.
+
+  - gamma = 1.30 at upper bound in Stage B. The ODC steepness parameter is
+    constrained and cannot reach its preferred value. Consider widening the
+    gamma upper bound.
+
+  - p = 3.52 is near the upper end of the expected [1.5, 3.5] range, and the
+    profile minimum is at p=4.0. This suggests the current P_BOUNDS = [1, 5]
+    is appropriate but the prior center (log 2) pulls p away from its optimum.
+    Consider recentering the prior at log 3 or log 4.
+
+v7.04 vs v7.05 comparison:
+  Param         v7.04     v7.05     Change
+  tau_0         17.26     15.01     -13% (less inflated)
+  r_offset       2.55      N/A     removed
+  b_s            1.04      1.75     +68% (regression)
+  p              N/A       3.52     new
+  gamma          1.23      1.30     +6% (now at bound)
+  saturation    17.6%      0.4%    fixed
+  delta range   36.3s     20.2s    -44% (improved)
+  eff_lag range  1-37      5-25    narrowed
+  QC-pass R2a    0.57      0.97    +70% (dramatic)
+  QC-pass R2n    0.68      0.98    +44% (dramatic)
+  LOHO timing    0.0s      0.0s    same (excellent)
+  weak-lag div   0.4%      9.6%    worse but still PASS
+
+Key insights:
+  1. The power-law descent is a clear structural improvement. By decoupling
+     shape (p) from delay (tau_0), the model can fit the "plateau then rapid
+     descent" pattern without forcing the kernel to degenerate to a delta function.
+     The 37x eff_lag ratio (v7.04) reduced to 5x (v7.05).
+
+  2. The baseline-corrected measurement equation solved saturation completely.
+     Removing r_offset and locking S_start to B_h eliminates the entire
+     baseline ambiguity that plagued v7.04.
+
+  3. b_s = 1.75 is the new problem. The power-law descent + gamma kernel
+     combination under-predicts the deviation amplitude, requiring b_s to
+     compensate. Two possible causes:
+     (a) cv=0.15 is too large, over-smoothing the convolved signal.
+     (b) The power-law curvature is too smooth relative to actual physiology.
+
+  4. The p-tau_0 trade-off visible in the profiles is informative: as p
+     increases from 1 to 5, the optimal tau_0 decreases from 33 to 15.
+     The linear model (p=1) needs tau_0~33 to produce apparent shape through
+     boundary effects, while p=4 lets tau_0 represent pure delay at ~15s.
+
+  5. RV#4 should likely be excluded (not just QC-flagged). Its -43% influence
+     on the training loss means it distorts the global fit significantly.
+
+Recommended next steps:
+  - Widen gamma bounds to [0.8, 1.6] or [0.8, 2.0] so gamma can reach
+    its preferred value.
+  - Investigate b_s = 1.75. Try either (a) reducing cv from 0.15 to 0.10,
+    or (b) using a per-hold cv, or (c) adding a per-hold b_s.
+  - Consider excluding RV#4 entirely (not just QC-flagging) given its -43%
+    influence and structural incompatibility.
+  - Recenter p prior from LogNormal(log 2, 0.35) to LogNormal(log 3, 0.35)
+    since the optimum is at p=3.5-4.0.
+  - The EFF_LAG_MIN = 5s floor binds on RV#4. If RV#4 is excluded, check
+    whether the floor binds on any other hold.
+
+
+14. FILES
+----------
+
+exp_v7_05_powerlaw.py     - Main experiment script
+exp_v7_05_results.txt     - This results file
+exp_v7_05_stage_a.png     - Stage A per-hold detail plots
+exp_v7_05_stage_b.png     - Stage B per-hold detail plots
+exp_v7_05_loho.png        - LOHO summary bar charts
+exp_v7_05_profile.png     - Profile likelihood plots (2x3: tau_0 + p)
+exp_v7_05_sensitivity.png - Sensitivity bar chart
