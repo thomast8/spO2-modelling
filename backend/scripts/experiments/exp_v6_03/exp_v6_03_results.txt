@@ -1,0 +1,363 @@
+v6.03 RESULTS: Nadir-Window Sensor Identification + Structural Degeneracy Breaking
+==================================================================================
+
+Date: 2026-03-04
+
+=== DATA ===
+
+Subject: single healthy adult male.
+Device: Masimo MightySat finger pulse oximeter (1s sampling).
+Session: 6 breath-hold apneas at varying lung volumes.
+
+  Hold   Type  Apnea pts  Recovery pts  t_end (s)  SpO2 range     Notes
+  FL#1   FL    178         5            179        97-98%         EXCLUDED (< 2% variation)
+  FRC#2  FRC   132        48            134        78-98%
+  RV#3   RV    126        49            129        52-98%
+  RV#4   RV    174        56            173        41-98%         Corrected (see below)
+  FRC#5  FRC   185        60            187        41-99%
+  FL#6   FL    366        38            372        52-97%
+
+Lung volume types:
+  FL  = Full Lung (TLC)   -- largest O2 store, slowest desaturation
+  FRC = Functional Residual Capacity -- moderate O2 store
+  RV  = Residual Volume   -- smallest O2 store, fastest desaturation
+
+Recovery data: first 90s post-apnea from rest/cooldown intervals in the CSV,
+capped at SpO2 = 97% ceiling. Recovery is appended to apnea for nadir window fitting.
+
+RV#4 data correction:
+  - Subject resumed breathing during the hold
+  - SpO2 hit sensor floor (40%) -- censored data, not real physiology
+  - Removed all readings after t=173s (sensor floor + breathing resumption)
+  - Before: 192 apnea pts, t_end=193, nadir at t=174 (SpO2=40%, -19s from end)
+  - After:  174 apnea pts, t_end=173, nadir at t=168 (SpO2=41%, -5s from end)
+
+=== MODEL ===
+
+Three-stage pipeline: Physiology -> ODC -> Sensor observation.
+
+--- Stage 1: Physiology (PaO2 and PaCO2 dynamics) ---
+
+PaO2 during apnea (exponential washout toward venous PO2):
+  PaO2(t) = pvo2 + (PaO2_0 - pvo2) * exp(-t / tau_washout)
+
+PaO2 during recovery (exponential rise toward equilibrium P_EQ=100 mmHg):
+  PaO2(t) = P_EQ - (P_EQ - PaO2_end) * exp(-(t - t_end) / tau_reoxy)
+  where PaO2_end = PaO2(t_end)
+
+PaCO2 during apnea (linear rise):
+  PaCO2(t) = paco2_0 + k_co2 * t
+
+PaCO2 during recovery (exponential clearance toward 40 mmHg):
+  PaCO2(t) = 40 + (PaCO2_end - 40) * exp(-(t - t_end) / tau_clear)
+  where tau_clear = 30s (fixed), PaCO2_end = paco2_0 + k_co2 * t_end
+
+Initial PaO2 from alveolar gas equation (corrected sign in v6.03):
+  PaO2_0 = FIO2*(PB - PH2O) - PaCO2_0/RQ - Aa
+         = 149.2 - paco2_0/0.8 - Aa
+  where Aa >= 0 is the A-a gradient (shared globally, not per-hold)
+
+--- Stage 2: Oxygen-Haemoglobin Dissociation Curve (ODC) ---
+
+Severinghaus (1979) ODC with Bohr shift and gamma steepness:
+  P50_eff = P50_BASE + 0.48 * (PaCO2 - 40)       [Bohr shift]
+  PaO2_virtual = PaO2 * (P50_BASE / P50_eff)       [Bohr-adjusted PO2]
+  PaO2_adj = P50_BASE * (PaO2_virtual / P50_BASE)^gamma  [steepness exponent]
+  SaO2 = 100 / (1 + 23400 / (PaO2_adj^3 + 150 * PaO2_adj))
+
+  P50_BASE = 26.6 mmHg (fixed constant)
+  gamma = 1.0 (standard) means the textbook Severinghaus curve
+  gamma > 1.0 steepens the curve (deeper desaturation for same PaO2)
+
+--- Stage 3: Sensor observation model ---
+
+Pure delay (transport + instrument):
+  SaO2_delayed(t) = SaO2(t - d)       [interpolated with left-edge hold]
+
+IIR low-pass filter (sensor averaging):
+  alpha = dt / (tau_f + dt),  dt = 1.0s
+  SpO2_meas = lfilter([alpha], [1, -(1-alpha)], SaO2_delayed)
+
+Offset + clipping:
+  SpO2_out = clip(SpO2_meas + r_offset, 0, 100)
+
+--- Parameters ---
+
+  Shared (global, same for all holds):
+    Aa          A-a gradient (mmHg)           bounds: [0, 30]
+    pvo2        Mixed venous PO2 (mmHg)       bounds: [15, 50]
+    k_co2       CO2 rise rate (mmHg/s)        bounds: [0.02, 0.25]
+    r_offset    SpO2 reading offset (%)       bounds: [-3, 3]
+    tau_reoxy   Reoxygenation time constant   bounds: [5, 30]
+    d           Sensor delay (s)              bounds: [1, 30]
+    tau_f       IIR filter time constant (s)  bounds: [1, 30]
+    gamma       ODC steepness exponent        Exp A/B: fixed 1.0
+                                              Exp C: free [0.8, 1.5]
+
+  Per-hold (initial conditions):
+    tau_washout  O2 washout time constant (s)  FL:[50,250] FRC:[20,100] RV:[10,80]
+    paco2_0      Initial PaCO2 (mmHg)          FL:[20,50]  FRC:[25,50]  RV:[30,55]
+
+  Exp B: 17 params (7 shared + 2x5 per-hold)
+  Exp C: 18 params (8 shared + 2x5 per-hold)
+
+--- Loss function ---
+
+  L = SSE(nadir_window) + penalties
+
+  SSE computed on nadir window: apnea (t <= t_end) + first 45s recovery.
+  Points with SpO2 < 95% weighted 3x (focus on desaturation region).
+
+  Penalties:
+    Nadir timing:   1000 * sum_holds (t_nadir_pred - t_nadir_obs)^2
+    CO2 priors:     2000 * (k_co2 - 0.06)^2 + 1000 * sum_holds (paco2_0 - 40)^2
+    IC regularize:  10 * sum_holds (param_i - type_mean)^2
+    Gamma prior:    5000 * (gamma - 1.0)^2  [Exp C only]
+
+--- Fixed constants ---
+
+  P50_BASE = 26.6 mmHg          Half-saturation PO2
+  P_EQ = 100.0 mmHg             Equilibrium PaO2 (breathing room air)
+  PACO2_NORMAL = 40.0 mmHg      Normal arterial CO2
+  TAU_CLEAR = 30.0 s            CO2 clearance time constant (fixed)
+  FIO2*(PB-PH2O) = 149.2 mmHg   Inspired O2 partial pressure
+  RQ = 0.8                      Respiratory quotient
+
+=== STRUCTURAL CHANGES vs v6.02 ===
+
+  1. Corrected AGE sign: PaO2_0 = 149.2 - PaCO2_0/0.8 - Aa (Aa >= 0, shared globally)
+     v6.02 had wrong sign (+delta_Aa), allowing PaO2 > PAO2 (unphysical)
+  2. Gamma fixed at 1.0 (Exp A/B) or free in (0.8, 1.5) with prior lambda=5000 (Exp C)
+  3. Strong CO2 priors: k_co2 toward 0.06 (lambda=2000), paco2_0 toward 40 (lambda=1000)
+  4. Nadir-timing penalty: 1000 * (t_nadir_pred - t_nadir_obs)^2 per hold
+  5. Nadir-window loss: apnea + first 45s recovery (no late recovery)
+
+=== KEY FINDING: d-DEGENERACY IS BROKEN ===
+
+The nadir timing penalty successfully constrains d to a finite interior value:
+  - Exp B: d = 15.50 (interior, was 30 at bound in v6.02)
+  - Exp C: d = 15.46 (extremely consistent with B, diff=0.3%)
+  - d-profile: loss is NO LONGER monotonically decreasing with d
+    d=10: 1,110k | d=15: 1,002k | d=20: 1,086k | d=25: 1,403k
+    (v6.02 had: d=10: 188k | d=15: 155k | d=20: 119k | d=25: 101k -- monotone)
+  - k_co2 is in the interior (0.086/0.113) -- no longer at bound extremes
+  - B vs C: d diff=0.3% (near-perfect consistency)
+
+This is the primary success of v6.03: the nadir timing penalty creates a loss
+minimum near d~15, preventing the optimizer from using maximum delay to
+compensate for missing physics.
+
+=== DATA CORRECTION: RV#4 ===
+
+RV#4 was corrected during this experiment:
+  - Subject resumed breathing during the hold
+  - SpO2 hit sensor floor (40%) -- censored data, not real physiology
+  - Removed all readings after t=173s (sensor floor + breathing resumption)
+  - Before: 192 apnea pts, t_end=193, nadir at t=174 (SpO2=40%, -19s from end)
+  - After:  174 apnea pts, t_end=173, nadir at t=168 (SpO2=41%, -5s from end)
+
+=== OBSERVED NADIR TIMING ===
+
+The nadir (minimum SpO2) occurs during recovery for most holds, confirming
+the sensor delay V-shape is present in the data:
+
+  Hold   t_end  t_nadir  delay_from_end  SpO2_nadir  Location
+  FRC#2    134     151        +17s           78%      recovery
+  RV#3     129     139        +10s           52%      recovery
+  RV#4     173     168         -5s           41%      apnea*
+  FRC#5    187     222        +35s           41%      recovery
+  FL#6     372     395        +23s           52%      recovery
+
+  * RV#4 nadir is during apnea -- deep desaturation means SpO2 was still
+    falling rapidly when the hold ended (-5s from end).
+
+=== EXP A: Two-Stage Sensor Identification ===
+
+Stage 1 (per-hold d/tau_f, fixed physiology):
+  Hold    d (s)   tau_f (s)   Notes
+  FRC#2   17.13   30.00*      d interior
+  RV#3    11.64   30.00*      d interior
+  RV#4     1.00*  30.00*      d at lower bound (nadir during apnea)
+  FRC#5   30.00*  29.76       d at upper bound
+  FL#6    21.86   30.00*      d interior
+
+  tau_f always at upper bound (30s) -- the filter wants maximum smoothing.
+  d spread = 29.00s (1-30) -- too inconsistent for reliable identification.
+  RV#4 d=1 makes sense: its nadir is DURING apnea, so delay should be minimal.
+  FRC#5 d=30: nadir at +35s post-apnea requires d beyond the bound.
+
+Stage 2 (global physiology, d=17.13 fixed):
+  Aa=0.00* (at bound), pvo2=15.00* (at bound), r_offset=3.00* (at bound)
+  k_co2=0.044 (interior), tau_reoxy=13.2 (interior)
+  R2(apnea) avg=0.878
+
+=== EXP B: Combined Model, gamma=1.0 (17 params) ===
+
+Shared params:
+  Aa        =  0.00       ** AT LOWER BOUND **
+  pvo2      = 24.18       (interior)
+  k_co2     =  0.0855     (interior -- no longer at extremes!)
+  r_offset  =  3.00       ** AT UPPER BOUND **
+  tau_reoxy = 30.00       ** AT UPPER BOUND **
+  d         = 15.50       (interior -- degeneracy broken!)
+  tau_f     = 30.00       ** AT UPPER BOUND **
+
+Per-hold ICs (PaO2_0 all ~99-101 since Aa=0):
+  FRC#2: tau_w=89.2,  paco2_0=39.6
+  RV#3:  tau_w=43.1,  paco2_0=40.0
+  RV#4:  tau_w=50.1,  paco2_0=39.1
+  FRC#5: tau_w=71.8,  paco2_0=40.1
+  FL#6:  tau_w=250.0*, paco2_0=38.9  (tau_washout at upper bound)
+
+Fit quality:
+  Hold     R2(apnea)  R2(nadir_window)  Nadir error
+  FRC#2    0.6624     0.8637             +1.0s
+  RV#3     0.7591     0.9006             +7.0s
+  RV#4     0.8900     0.7862            +21.0s
+  FRC#5    0.8078     0.8291            -18.0s
+  FL#6     0.9109     0.9250             -6.0s
+  AVG      0.8061     0.8609             10.6s
+
+R2(apnea) is poor with gamma=1.0 -- the standard Severinghaus ODC steepness
+is insufficient to match the observed desaturation depth.
+
+=== EXP C: Gamma as Sensor Calibration (18 params) ===
+
+Shared params (same as B except):
+  gamma    =  1.500     ** AT UPPER BOUND (1.5) **
+  pvo2     = 27.22      (higher than B's 24.18 -- gamma compensates)
+  k_co2    =  0.113     (higher than B's 0.086)
+  r_offset =  1.197     (interior -- gamma absorbs what r_offset was doing)
+  d        = 15.46      (extremely consistent with B's 15.50)
+
+Fit quality:
+  Hold     R2(apnea)  R2(nadir_window)  Nadir error
+  FRC#2    0.9208     0.9052             +1.0s
+  RV#3     0.8912     0.9349             +7.0s
+  RV#4     0.9036     0.7650            +21.0s
+  FRC#5    0.9059     0.8733            -18.0s
+  FL#6     0.9894     0.9817             -6.0s
+  AVG      0.9222     0.8920             10.6s
+
+gamma hits upper bound (1.5) and fit improves significantly over B:
+R2(apnea) 0.806 -> 0.922, R2(nadir_window) 0.861 -> 0.892.
+
+=== SUCCESS CRITERIA ASSESSMENT ===
+
+1. Exp A S1: d finite for majority         -> FAIL (3/5, but 2 at bounds)
+2. Exp A S1: d spread < 10s               -> FAIL (spread=29s)
+3. Exp B: d not at upper bound             -> PASS (d=15.50)
+4. Exp B: k_co2 not at extremes            -> PASS (k_co2=0.086, interior)
+5. Exp B: R2(apnea) avg >= 0.93           -> FAIL (avg=0.806)
+6. Exp B: nadir timing error < 5s avg     -> FAIL (avg=10.6s)
+7. Exp C: gamma < 1.3                     -> FAIL (gamma=1.50, at bound)
+   B vs C consistency                     -> PASS (d diff=0.3%)
+8. d-profile: non-monotone loss            -> PASS
+
+=== DIAGNOSIS ===
+
+1. NADIR PENALTY WORKS FOR d IDENTIFICATION
+   The primary goal -- breaking the d-degeneracy -- is achieved. The loss
+   minimum near d~15 creates a well-defined optimum instead of the monotone
+   decrease seen in v6.02. k_co2 stays in the interior too, eliminating the
+   "bifurcation" between low-d/high-k_co2 and high-d/low-k_co2.
+
+2. d IS REMARKABLY STABLE ACROSS B AND C
+   d=15.50 (B) vs d=15.46 (C) -- only 0.3% difference. Despite gamma being
+   freed and changing from 1.0 to 1.5, d barely moves. This confirms the
+   nadir timing penalty is identifying a genuine delay, not a phantom.
+
+3. GAMMA=1.0 IS INSUFFICIENT FOR DESATURATION DEPTH
+   With gamma=1.0, the standard Severinghaus ODC cannot produce steep
+   enough desaturation to match observed SpO2 drops (to 41-52%). This
+   limits R2(apnea) to 0.81 avg. When gamma is freed (Exp C), it hits
+   the upper bound (1.5), confirming the data requires steeper ODC than
+   the standard physiological curve.
+
+4. tau_f ALWAYS AT UPPER BOUND (30s)
+   Across all experiments, tau_f wants to be as large as possible. This
+   suggests the sensor smoothing model (simple IIR low-pass) is absorbing
+   model error from physiology. The d + tau_f total delay (~45s) is much
+   larger than expected for a pulse oximeter.
+
+5. NADIR TIMING MISMATCH IS HETEROGENEOUS
+   RV#4 (+21s error) and FRC#5 (-18s error) are the worst. RV#4's nadir
+   is during apnea (sensor delay can't explain a pre-apnea-end nadir,
+   even after data correction). FRC#5 has nadir at +35s post-apnea,
+   requiring d+tau_f >> 30s. A single global d cannot accommodate both.
+
+6. Aa=0 IS PHYSICALLY CORRECT
+   The corrected AGE sign with Aa=0 gives PaO2_0 ~ 99-101 mmHg
+   (= 149.2 - 40/0.8 = 99.2). This is reasonable for a young healthy
+   subject. The v6.02 delta_Aa=+15 was compensating for the wrong sign.
+
+7. CO2 PRIORS EFFECTIVE
+   paco2_0 stays near 39-40 mmHg across all holds, k_co2 near 0.09-0.11.
+   The priors successfully prevent the CO2 pathway from acting as a
+   time-shift surrogate.
+
+8. d-PROFILE SHOWS CLEAR MINIMUM
+   d=10: 1,110k | d=15: 1,002k | d=20: 1,086k | d=25: 1,403k
+   Minimum near d=15, consistent with the free fit (d=15.5).
+   At d=15, pvo2=22.6 (interior) and tau_reoxy=19.2 (interior).
+   At d=10/20/25, pvo2 crashes to 15 (at bound) -- confirming the
+   optimizer can only find coherent physiology near d~15.
+
+=== NEXT STEPS ===
+
+1. WIDEN GAMMA BOUNDS: The data clearly needs gamma > 1.5 for adequate
+   desaturation depth. Try gamma in (1.0, 3.0) with moderate prior.
+
+2. PER-HOLD d OR COMPOUND SENSOR: Consider that the observed "delay"
+   varies by hold (10s to 35s). This could reflect:
+   - Different perfusion delays (peripheral vasoconstriction during
+     deep desaturation increases finger-to-artery lag)
+   - The single IIR filter being an inadequate sensor model
+
+3. REEXAMINE tau_f: The IIR filter at 30s is too heavy. Consider
+   either fixing tau_f at a literature value (3-8s for modern pulse ox)
+   or using a different filter model (e.g., sliding window average).
+
+4. TWO-COMPONENT DELAY: Physical sensor delay (d~8-12s, fixed) +
+   variable physiological transport delay (perfusion-dependent).
+
+5. NADIR TIMING PENALTY TUNING: lambda=1000 may be too weak relative
+   to the SSE (~1M). Try lambda=10000 or normalize by SSE.
+
+================================================================================
+FULL RAW OUTPUT
+================================================================================
+
+Loading holds with recovery data...
+  FL#1 [EXCLUDED]: 178 apnea + 5 recovery pts (t_end=179s, recovery SpO2 97-97%)
+  FRC#2: 132 apnea + 48 recovery pts (t_end=134s, recovery SpO2 78-94%)
+  RV#3: 126 apnea + 49 recovery pts (t_end=129s, recovery SpO2 52-96%)
+  RV#4: 174 apnea + 56 recovery pts (t_end=173s, recovery SpO2 59-91%)
+  FRC#5: 185 apnea + 60 recovery pts (t_end=187s, recovery SpO2 41-96%)
+  FL#6: 366 apnea + 38 recovery pts (t_end=372s, recovery SpO2 52-89%)
+
+Observed nadir timing:
+  FL#1 [EXCLUDED]: t_nadir=173s (SpO2=97%, apnea, -6s from end)
+  FRC#2: t_nadir=151s (SpO2=78%, recovery, +17s from end)
+  RV#3: t_nadir=139s (SpO2=52%, recovery, +10s from end)
+  RV#4: t_nadir=168s (SpO2=41%, apnea, -5s from end)
+  FRC#5: t_nadir=222s (SpO2=41%, recovery, +35s from end)
+  FL#6: t_nadir=395s (SpO2=52%, recovery, +23s from end)
+
+Exp A Stage 1: d=[17.13, 11.64, 1.00, 30.00, 21.86], median=17.13
+Exp A Stage 2: fun=33777.97
+Exp B: fun=991977.85, d=15.50
+Exp C: fun=967621.63, d=15.46, gamma=1.50
+
+d-profile (Exp B structure):
+  d=10: loss=1110477 | d=15: loss=1001879 | d=20: loss=1086390 | d=25: loss=1403465
+  -> NOT monotone (minimum near d=15, loss increases away from minimum)
+
+Per-hold R2(apnea) / nadir error:
+  Hold      A:TwoStage     B:gamma=1.0    C:gamma_free
+  FRC#2     0.694/+1s      0.662/+1s      0.921/+1s
+  RV#3      0.915/+8s      0.759/+7s      0.891/+7s
+  RV#4      0.921/+22s     0.890/+21s     0.904/+21s
+  FRC#5     0.931/-17s     0.808/-18s     0.906/-18s
+  FL#6      0.931/-6s      0.911/-6s      0.989/-6s
+  AVG       0.878/10.8s    0.806/10.6s    0.922/10.6s

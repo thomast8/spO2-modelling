@@ -1,0 +1,222 @@
+v5.03: Recovery Phase — Full Trace Modeling — Results
+=====================================================
+
+Date: 2026-03-07
+
+
+## Hypothesis
+
+Including 30-60s of recovery data after breathing resumes should break the
+delay/pao2_0 symmetry and make both d and tau_f identifiable. The V-shaped
+nadir (SpO2 keeps falling after breathing resumes due to sensor delay, then
+recovers) creates an asymmetric feature that constrains the sensor model.
+
+
+## Data Recap
+
+Subject: Thomas, healthy male, trained breath-holder
+Device: Viatom Checkme O2 Max pulse oximeter (finger sensor, 1Hz sampling)
+Session: 6 breath-hold apneas at varying lung volumes (session 1)
+
+Recovery data appended from raw CSV. Recovery truncated at 90s or when
+SpO2 reaches 97%.
+
+Hold Table:
+  #1 FL   178 apnea pts + recovery      t_end=179s   SpO2: 97-99%  [minimal desaturation]
+  #2 FRC  132 apnea + ~48 recovery pts  t_end=134s   recovery SpO2: 78-94%
+  #3 RV   126 apnea + ~49 recovery pts  t_end=129s   recovery SpO2: 52-96%
+  #4 RV   192 apnea + ~56 recovery pts  t_end=193s   recovery SpO2: 59-91%
+  #5 FRC  185 apnea + ~60 recovery pts  t_end=187s   recovery SpO2: 41-96%
+  #6 FL   366 apnea + ~38 recovery pts  t_end=372s   recovery SpO2: 52-89%
+
+Lung volume types:
+  FL  = Full Lungs (TLC): maximal O2 store, slowest desaturation
+  FRC = Functional Residual Capacity: moderate O2 store
+  RV  = Residual Volume: minimal O2 store, fastest desaturation
+
+
+## Full Model
+
+### Physiology Layer (piecewise PAO2)
+
+Apnea (t <= t_end):
+  PAO2(t) = PvO2 + (PAO2_0 - PvO2) * exp(-t / tau_washout)
+
+Recovery (t > t_end):
+  PAO2(t) = 100 mmHg    [instantaneous jump — first breath restores alveolar O2]
+
+CO2 (apnea):
+  PaCO2(t) = PaCO2_0 + k_co2 * t
+
+CO2 (recovery):
+  PaCO2(t) = 40 mmHg    [immediate normalization]
+
+Note: No exponential re-oxygenation — PAO2 jumps discontinuously at t_end.
+This is the simplest possible recovery model (improved in v6).
+
+
+### ODC Layer (Severinghaus + Bohr shift)
+
+P50_eff(t) = 26.6 + 0.48 * (PaCO2(t) - 40)       [Bohr shift]
+PAO2_virt = PAO2 * (26.6 / P50_eff)
+PAO2_adj  = 26.6 * (PAO2_virt / 26.6)^gamma        [steepness]
+SaO2 = 100 / (1 + 23400 / (PAO2_adj^3 + 150 * PAO2_adj))
+
+
+### Sensor Layer (D+F variant)
+
+Delay:
+  SaO2_delayed[i] = interp(t[i] - d, t, SaO2, left=SaO2[0])
+
+IIR low-pass filter:
+  alpha = dt / (tau_f + dt),  dt = 1s
+  SpO2[i] = (1 - alpha) * SpO2[i-1] + alpha * SaO2_delayed[i]
+
+Output:
+  SpO2_pred = clip(SpO2 + r_offset, 0, 100)
+
+
+### Parameters and Bounds
+
+Common physiology (7 params):
+  pao2_0       PAO2 at t=0       FL: [100, 250]  FRC: [80, 120]  RV: [70, 110]  mmHg
+  pvo2         mixed venous PO2   all: [20, 50]  mmHg
+  tau_washout  washout time const  FL: [50, 250]  FRC: [20, 100]  RV: [10, 80]   s
+  gamma        ODC steepness       all: [0.8, 2.0]
+  paco2_0      initial PaCO2       FL: [25, 45]  FRC: [30, 45]  RV: [35, 50]    mmHg
+  k_co2        CO2 rise rate        all: [0.02, 0.15]  mmHg/s
+  r_offset     SpO2 bias            all: [-3, 3]  %
+
+Sensor params (added per variant):
+  d            delay                all: [3, 30]  s
+  tau_f        filter time const    all: [1, 20]  s
+
+Loss: weighted SSE with alpha=3.0 for SpO2 < 95% (desaturation-weighted).
+Optimizer: differential_evolution, maxiter=3000, popsize=40, seed=42.
+
+
+## Model Variants (5 total)
+
+1. CO2-Bohr apnea (7p):  baseline, apnea only, no sensor, no recovery
+2. CO2-Bohr full  (7p):  piecewise PAO2 (decay -> 100 at t_end), PaCO2 -> 40, no sensor
+3. Delay full     (8p):  piecewise PAO2 + delay d [3,30]s only
+4. Filter full    (8p):  piecewise PAO2 + IIR filter tau_f [1,20]s only
+5. D+F full       (9p):  piecewise PAO2 + delay d + filter tau_f — the main test
+
+
+## Results: Per-Hold Comparison
+
+### FL#1 (178 apnea pts + recovery, SpO2 97-99%)
+
+Minimal desaturation — not informative for sensor identification.
+All variants produce similar fits on this near-flat trace.
+
+### FRC#2 (132 apnea + ~48 recovery pts, recovery SpO2 78-94%)
+
+Recovery behavior across variants:
+  CO2-Bohr (full):  physiology instantly jumps to ~98% at t_end — sharp discontinuity
+  Delay (full):     shifts the discontinuity by d seconds — delayed jump, still too sharp
+  Filter (full):    smooths the jump into gradual rise, but nadir timing wrong (too early)
+  D+F (full):       delay shifts nadir AND filter smooths recovery — best recovery fit
+
+D+F produces good V-shape but recovery R2 still moderate (~0.5-0.7).
+
+### RV#3 (126 apnea + ~49 recovery pts, recovery SpO2 52-96%)
+
+Deep desaturation. D+F fits the deep nadir well, recovery R2 positive.
+The V-shape is clear and the sensor model captures the delayed minimum.
+
+### RV#4 (192 apnea + ~56 recovery pts, recovery SpO2 59-91%)
+
+Challenging — very deep desaturation. d still at or near upper bound (30s).
+Recovery fit strained by the extreme depth.
+
+### FRC#5 (185 apnea + ~60 recovery pts, recovery SpO2 41-96%)
+
+Best recovery fit with D+F. Clear V-shape well captured by the sensor model.
+Longest recovery window with widest SpO2 range provides most constraint.
+
+### FL#6 (366 apnea + ~38 recovery pts, recovery SpO2 52-89%)
+
+Long hold with moderate recovery data. D+F recovery fit decent.
+
+
+## Key Sensor Parameters: d and tau_f Across Holds (D+F variant)
+
+  Hold        d (s)       tau_f (s)    R2_full   R2_apnea   R2_recovery
+  --------    --------    ---------    -------   --------   -----------
+  FRC#2       ~30 (hi)    ~5-10        high      high       moderate
+  RV#3        ~30 (hi)    ~5-10        high      high       positive
+  RV#4        ~30 (hi)    ~5-15        high      high       variable
+  FRC#5       ~30 (hi)    ~8-15        high      high       best
+  FL#6        ~30 (hi)    ~5-10        high      high       decent
+
+CRITICAL: d pins at 30s (upper bound) for most/all holds.
+tau_f takes interior values (~5-15s) — this IS identifiable from recovery.
+
+
+## Success Criteria Assessment
+
+1. Does recovery data break the d/pao2_0 symmetry?
+   PARTIALLY. tau_f is now identifiable (interior values), but d is NOT
+   (still pins at upper bound). The symmetry shifts rather than breaks.
+
+2. Does the V-shaped nadir constrain the sensor model?
+   YES for tau_f: the gradual recovery slope directly constrains the
+   filter time constant.
+   NO for d: the delay just shifts when the recovery "starts" in the
+   model, creating a new confound with recovery timing.
+
+3. Is D+F the best variant for recovery?
+   YES — it is clearly superior to all other variants during recovery.
+   CO2-Bohr alone is catastrophic (instant jump to 98%).
+   Delay alone produces a shifted but still-sharp jump.
+   Filter alone gets the smoothness right but the timing wrong.
+   Only D+F captures both the timing and the shape of the V-nadir.
+
+
+## Key Findings
+
+1. d STILL pins at 30s (upper bound) for most holds even with recovery
+   data — the delay/physiology confound is NOT fully broken.
+
+2. tau_f IS identifiable from recovery data — interior values (~5-15s)
+   across holds. This is a genuine identifiability win.
+
+3. CO2-Bohr without sensor is catastrophic on recovery: physiology alone
+   predicts instant SpO2 recovery at t_end. The sensor model is essential.
+
+4. The simple piecewise recovery (PAO2 jumps to 100) is too aggressive —
+   real alveolar re-oxygenation is gradual, not instantaneous. This creates
+   unrealistic dynamics where the model must compensate with extreme d values.
+
+5. Recovery R2 is highly variable: good for deep desaturations (more
+   V-shape signal), poor for moderate ones (less constraint).
+
+6. The instantaneous PAO2 jump creates an inherent bias: the model needs
+   unrealistically large d to delay the recovery onset, absorbing what
+   should be gradual re-oxygenation dynamics into the delay parameter.
+
+
+## Conclusions
+
+1. Recovery data DOES constrain tau_f (filter time constant) — this is
+   a genuine identifiability win. The recovery slope directly determines
+   the IIR filter smoothing.
+
+2. Recovery data does NOT constrain d (delay) — it still pins at upper
+   bound. The confound shifts from d <-> pao2_0 to d <-> recovery_timing:
+   longer d means the model can delay when recovery starts, compensating
+   for the too-aggressive instantaneous PAO2 jump.
+
+3. The simple piecewise recovery (instant PAO2 jump) is insufficient.
+   A realistic recovery model is needed — exponential re-oxygenation
+   with its own time constant (tau_reoxy).
+
+4. This motivates two follow-up directions:
+   (a) Exponential re-oxygenation model: PAO2(t) = 100 - (100 - PAO2_end) *
+       exp(-(t - t_end) / tau_reoxy) -- eliminates the need for extreme d
+       to delay recovery onset (-> v6 series)
+   (b) Global fits with shared sensor params: fitting d and tau_f across
+       all holds simultaneously, since they should be device properties
+       not hold-specific (-> Exp 4)

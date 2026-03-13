@@ -1,12 +1,12 @@
 # SpO2 Desaturation Modelling
 
-A webapp for modelling SpO2 desaturation during breath-hold apnea sessions using the Hill equation oxygen-haemoglobin dissociation curve.
+A webapp for modelling SpO2 desaturation during breath-hold apnea sessions using the Severinghaus (1979) oxygen-haemoglobin dissociation curve.
 
 ## Features
 
 - **CSV Upload**: Import pulse oximeter session data, auto-detect apnea holds
 - **Hold Tagging**: Classify holds as FRC (Functional Residual Capacity), RV (Residual Volume), or FL (Full Lungs)
-- **Model Fitting**: Fit Hill equation parameters per hold type with interactive preview
+- **Model Fitting**: Fit Severinghaus ODC parameters per hold type with interactive preview
 - **Model Versioning**: Track fit versions with rollback capability
 - **Analysis Tools**: Threshold prediction, VO2 sensitivity analysis, desaturation rate calculation
 - **Dark Theme**: Polished data visualization with Plotly charts
@@ -15,7 +15,7 @@ A webapp for modelling SpO2 desaturation during breath-hold apnea sessions using
 
 - **Backend**: FastAPI + SQLAlchemy (async) + SQLite
 - **Frontend**: React + TypeScript + MUI + Plotly
-- **Model**: Hill equation ODC with residual correction, fitted via differential evolution
+- **Model**: Severinghaus ODC with gamma steepness exponent, fitted via differential evolution
 
 ## Development
 
@@ -50,13 +50,14 @@ uv run pytest
 
 ## Model
 
-The Hill equation models O2-haemoglobin dissociation:
+The model uses exponential alveolar O2 washout, a saturating Bohr effect, and the Severinghaus (1979) ODC with adjustable steepness:
 
 ```
-O2(t)     = O2_start - (VO2 / 60) * max(t - lag, 0)
-PaO2_eff  = O2(t) / scale
-SpO2_base = 100 * PaO2_eff^n / (PaO2_eff^n + P50^n)
-SpO2(t)   = SpO2_base + r_offset + r_decay * exp(-t / tau_decay)
+PAO2(t)      = pvo2 + (pao2_0 - pvo2) * exp(-t / tau_washout)
+P50_eff(t)   = P50_BASE + bohr_max * (1 - exp(-t / tau_bohr))
+PAO2_virtual = PAO2 * (P50_BASE / P50_eff)          [Bohr shift]
+PAO2_adj     = P50_BASE * (PAO2_virtual / P50_BASE)^gamma  [steepness]
+SpO2(t)      = r_offset + 100 / (1 + 23400/(PAO2_adj^3 + 150*PAO2_adj))
 ```
 
 Parameters are fitted per hold type (FRC/RV/FL) with different bounds reflecting the physiological differences in lung volume.

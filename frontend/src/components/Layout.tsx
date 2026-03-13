@@ -57,7 +57,7 @@ export default function Layout() {
           SpO₂ Modelling
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          Hill Equation ODC Fit
+          Severinghaus ODC Fit
         </Typography>
       </Box>
       <List sx={{ px: 1 }}>

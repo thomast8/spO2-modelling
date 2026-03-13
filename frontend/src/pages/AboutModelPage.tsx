@@ -3,8 +3,8 @@ import {
   InfoOutlined as InfoIcon,
   Science as ScienceIcon,
   ShowChart as CurveIcon,
-  Timer as LagIcon,
   Tune as CorrectionIcon,
+  TuneOutlined as OffsetIcon,
 } from "@mui/icons-material";
 import {
   Box,
@@ -41,10 +41,9 @@ const PARAM_LABELS: Record<string, string> = {
   tau_washout: "\u03C4 Washout",
   bohr_max: "Bohr Max \u0394P50",
   tau_bohr: "\u03C4 Bohr",
-  lag: "Lag",
   r_offset: "Offset",
   p50_base: "P50 Base (fixed)",
-  n: "Hill Coefficient (n)",
+  gamma: "Steepness (\u03B3)",
 };
 
 const PARAM_UNITS: Record<string, string> = {
@@ -53,10 +52,9 @@ const PARAM_UNITS: Record<string, string> = {
   tau_washout: "seconds",
   bohr_max: "mmHg",
   tau_bohr: "seconds",
-  lag: "seconds",
   r_offset: "% SpO\u2082",
   p50_base: "mmHg",
-  n: "dimensionless",
+  gamma: "dimensionless",
 };
 
 const PARAM_RANGES: Record<string, string> = {
@@ -65,17 +63,16 @@ const PARAM_RANGES: Record<string, string> = {
   tau_washout: "10 \u2013 250",
   bohr_max: "2.0 \u2013 10.0",
   tau_bohr: "60 \u2013 180",
-  lag: "5 \u2013 45",
   r_offset: "\u22123.0 \u2013 3.0",
   p50_base: "26.6 (fixed)",
-  n: "2.6 \u2013 3.2",
+  gamma: "0.8 \u2013 2.0",
 };
 
 const COMPONENT_ICONS: Record<string, ReactElement> = {
   lungs: <LungsIcon />,
   curve: <CurveIcon />,
   correction: <CorrectionIcon />,
-  lag: <LagIcon />,
+  offset: <OffsetIcon />,
 };
 
 const HOLD_TYPE_ORDER = ["FRC", "RV", "FL"] as const;
@@ -87,10 +84,9 @@ const DEMO_PARAMS = {
   pao2_0: 120,
   pvo2: 40,
   tau_washout: 80,
-  n: 2.7,
+  gamma: 1.0,
   bohr_max: 5.0,
   tau_bohr: 120,
-  lag: 19,
   r_offset: 0,
 };
 
@@ -128,8 +124,7 @@ function PAO2WashoutChart() {
     return holdTypes.map(({ name, pao2_0, tau, color }) => ({
       x: t,
       y: t.map((ti) => {
-        const tEff = Math.max(ti - DEMO_PARAMS.lag, 0);
-        return DEMO_PARAMS.pvo2 + (pao2_0 - DEMO_PARAMS.pvo2) * Math.exp(-tEff / tau);
+        return DEMO_PARAMS.pvo2 + (pao2_0 - DEMO_PARAMS.pvo2) * Math.exp(-ti / tau);
       }),
       type: "scatter" as const,
       mode: "lines" as const,
@@ -154,19 +149,32 @@ function PAO2WashoutChart() {
   );
 }
 
-// ── Chart 2: Hill dissociation curve ─────────────────────────
-function HillCurveChart() {
+// ── Chart 2: Severinghaus dissociation curve ────────────────
+function SeveringhausCurveChart() {
   const pao2 = useMemo(() => linspace(0.1, 120, 300), []);
 
+  // Severinghaus: SO2 = 100 / (1 + 23400/(x^3 + 150*x))
+  const severinghaus = (x: number) => {
+    const clamped = Math.max(x, 0.01);
+    return 100.0 / (1.0 + 23400.0 / (Math.pow(clamped, 3) + 150.0 * clamped));
+  };
+
+  // With gamma: apply power transform around P50
+  const severinghausGamma = (x: number, gamma: number) => {
+    const clamped = Math.max(x, 0.01);
+    const xAdj = P50_BASE * Math.pow(clamped / P50_BASE, gamma);
+    return severinghaus(xAdj);
+  };
+
   const traces: Data[] = useMemo(() => {
-    const hillCoeffs = [
-      { n: 2.0, name: "n = 2.0", color: chartColors.residual, dash: "dot" as const },
-      { n: 2.7, name: "n = 2.7 (physiological)", color: chartColors.spo2Fit, dash: "solid" as const },
-      { n: 4.0, name: "n = 4.0", color: chartColors.hr, dash: "dash" as const },
+    const curves = [
+      { gamma: 0.8, name: "\u03B3 = 0.8 (shallower)", color: chartColors.residual, dash: "dot" as const },
+      { gamma: 1.0, name: "\u03B3 = 1.0 (standard)", color: chartColors.spo2Fit, dash: "solid" as const },
+      { gamma: 1.5, name: "\u03B3 = 1.5 (steeper)", color: chartColors.hr, dash: "dash" as const },
     ];
-    const result: Data[] = hillCoeffs.map(({ n, name, color, dash }) => ({
+    const result: Data[] = curves.map(({ gamma, name, color, dash }) => ({
       x: pao2,
-      y: pao2.map((p) => 100 * Math.pow(p, n) / (Math.pow(p, n) + Math.pow(P50_BASE, n))),
+      y: pao2.map((p) => severinghausGamma(p, gamma)),
       type: "scatter" as const,
       mode: "lines" as const,
       name,
@@ -178,7 +186,7 @@ function HillCurveChart() {
       y: [0, 50],
       type: "scatter",
       mode: "lines",
-      name: `P50 = ${P50_BASE}`,
+      name: `P50 \u2248 ${P50_BASE}`,
       line: { color: "rgba(0,0,0,0.3)", width: 1, dash: "dot" },
       showlegend: true,
     });
@@ -198,7 +206,7 @@ function HillCurveChart() {
       data={traces}
       layout={{
         ...chartLayout,
-        title: { text: "Oxygen\u2013Haemoglobin Dissociation Curve", font: { size: 13 } },
+        title: { text: "Oxygen\u2013Haemoglobin Dissociation Curve (Severinghaus)", font: { size: 13 } },
         xaxis: { ...chartLayout.xaxis, title: { text: "PaO\u2082 eff (mmHg-eq.)" } },
         yaxis: { ...chartLayout.yaxis, title: { text: "SpO\u2082 (%)" }, range: [0, 105] },
       }}
@@ -222,8 +230,7 @@ function BohrEffectChart() {
     return bohrCurves.map(({ bmax, tau, name, color, dash }) => ({
       x: t,
       y: t.map((ti) => {
-        const tEff = Math.max(ti - DEMO_PARAMS.lag, 0);
-        return P50_BASE + bmax * (1 - Math.exp(-tEff / Math.max(tau, 0.01)));
+        return P50_BASE + bmax * (1 - Math.exp(-ti / Math.max(tau, 0.01)));
       }),
       type: "scatter" as const,
       mode: "lines" as const,
@@ -248,62 +255,6 @@ function BohrEffectChart() {
   );
 }
 
-// ── Chart 4: Lag effect comparison ───────────────────────────
-function LagChart() {
-  const t = useMemo(() => linspace(0, 400, 300), []);
-
-  const computeSpo2 = useMemo(() => (ti: number, lag: number) => {
-    const tEff = Math.max(ti - lag, 0);
-    const pao2 = DEMO_PARAMS.pvo2 + (DEMO_PARAMS.pao2_0 - DEMO_PARAMS.pvo2) * Math.exp(-tEff / DEMO_PARAMS.tau_washout);
-    const p50Eff = P50_BASE + DEMO_PARAMS.bohr_max * (1 - Math.exp(-tEff / Math.max(DEMO_PARAMS.tau_bohr, 0.01)));
-    const base = 100 * Math.pow(pao2, DEMO_PARAMS.n) /
-      (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(p50Eff, DEMO_PARAMS.n));
-    return Math.min(Math.max(base + DEMO_PARAMS.r_offset, 0), 100);
-  }, []);
-
-  const traces: Data[] = useMemo(() => [
-    {
-      x: t,
-      y: t.map((ti) => computeSpo2(ti, 0)),
-      type: "scatter" as const,
-      mode: "lines" as const,
-      name: "lag = 0 s (arterial)",
-      line: { color: "rgba(0,0,0,0.3)", width: 1.5, dash: "dot" as const },
-    },
-    {
-      x: t,
-      y: t.map((ti) => computeSpo2(ti, 12)),
-      type: "scatter" as const,
-      mode: "lines" as const,
-      name: "lag = 12 s",
-      line: { color: chartColors.spo2Fit, width: 2.5 },
-    },
-    {
-      x: t,
-      y: t.map((ti) => computeSpo2(ti, 25)),
-      type: "scatter" as const,
-      mode: "lines" as const,
-      name: "lag = 25 s",
-      line: { color: chartColors.threshold, width: 2, dash: "dash" as const },
-    },
-  ], [t, computeSpo2]);
-
-  return (
-    <Plot
-      data={traces}
-      layout={{
-        ...chartLayout,
-        title: { text: "Effect of Finger\u2013Arterial Lag", font: { size: 13 } },
-        xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
-        yaxis: { ...chartLayout.yaxis, title: { text: "SpO\u2082 (%)" }, range: [0, 105] },
-      }}
-      config={{ displayModeBar: false, responsive: true }}
-      useResizeHandler
-      style={{ width: "100%", height: CHART_HEIGHT }}
-    />
-  );
-}
-
 // ── Chart for full model ─────────────────────────────────────
 function FullModelChart() {
   const t = useMemo(() => linspace(0, 400, 400), []);
@@ -311,14 +262,14 @@ function FullModelChart() {
   const traces: Data[] = useMemo(() => {
     const p = DEMO_PARAMS;
     const pao2Arr = t.map((ti) => {
-      const tEff = Math.max(ti - p.lag, 0);
-      return p.pvo2 + (p.pao2_0 - p.pvo2) * Math.exp(-tEff / p.tau_washout);
+      return p.pvo2 + (p.pao2_0 - p.pvo2) * Math.exp(-ti / p.tau_washout);
     });
     const spo2 = t.map((ti, i) => {
-      const tEff = Math.max(ti - p.lag, 0);
       const pao2 = pao2Arr[i];
-      const p50Eff = P50_BASE + p.bohr_max * (1 - Math.exp(-tEff / Math.max(p.tau_bohr, 0.01)));
-      const base = 100 * Math.pow(pao2, DEMO_PARAMS.n) / (Math.pow(pao2, DEMO_PARAMS.n) + Math.pow(p50Eff, DEMO_PARAMS.n));
+      const p50Eff = P50_BASE + p.bohr_max * (1 - Math.exp(-ti / Math.max(p.tau_bohr, 0.01)));
+      const pao2Virtual = pao2 * (P50_BASE / p50Eff);
+      const pao2Adj = P50_BASE * Math.pow(Math.max(pao2Virtual, 0.01) / P50_BASE, p.gamma);
+      const base = 100.0 / (1.0 + 23400.0 / (Math.pow(pao2Adj, 3) + 150.0 * pao2Adj));
       return Math.min(Math.max(base + p.r_offset, 0), 100);
     });
 
@@ -366,9 +317,8 @@ function FullModelChart() {
 // Map component icons to their charts
 const COMPONENT_CHARTS: Record<string, () => ReactElement> = {
   lungs: () => <PAO2WashoutChart />,
-  curve: () => <HillCurveChart />,
+  curve: () => <SeveringhausCurveChart />,
   correction: () => <BohrEffectChart />,
-  lag: () => <LagChart />,
 };
 
 // ── Section helpers ──────────────────────────────────────────
@@ -422,9 +372,9 @@ export default function AboutModelPage() {
       {/* ── Overview equations ──────────────────────────────────── */}
       <SectionTitle>Model Equations</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        The complete model is built from four layered equations. Each transforms
+        The complete model is built from three layered equations. Each transforms
         the output of the previous step, from alveolar PO&#x2082; washout down to the
-        final SpO&#x2082; reading at the finger.
+        final SpO&#x2082; prediction.
       </Typography>
       <Paper sx={{ p: 2.5 }}>
         {MODEL_SUMMARY.equations.map((eq, i) => (
@@ -442,8 +392,8 @@ export default function AboutModelPage() {
       {/* ── Model Components ───────────────────────────────────── */}
       <SectionTitle>Model Components</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        The model decomposes SpO&#x2082; prediction into four physiological
-        processes. Each section below explains the component, its equation, and
+        The model decomposes SpO&#x2082; prediction into physiological
+        components. Each section below explains the component, its equation, and
         includes an interactive chart showing how the component behaves.
       </Typography>
 
@@ -505,7 +455,7 @@ export default function AboutModelPage() {
       {/* ── Parameter Reference ────────────────────────────────── */}
       <SectionTitle>Parameter Reference</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Eight fitted parameters and one fixed haemoglobin constant, with their
+        Seven fitted parameters and one fixed haemoglobin constant, with their
         units, typical ranges (across all hold types), and physical interpretation.
       </Typography>
 

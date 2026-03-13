@@ -20,32 +20,29 @@ from app.services.hill_model import ApneaModelParams, compute_r_squared, predict
 DEFAULT_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "FRC": {
         "pao2_0": (80, 120),        # Smaller lung volume -> lower initial PAO2
-        "pvo2": (25, 50),           # Can drop below 30 in prolonged apnea
+        "pvo2": (20, 50),           # Can drop below 30 in prolonged apnea
         "tau_washout": (20, 100),    # Faster washout with less O2 reserve
-        "n": (2.6, 3.2),           # Hill coefficient; varies with temperature/2,3-DPG
-        "bohr_max": (2.0, 10.0),   # Max Bohr P50 shift (mmHg); up to ~10 at respiratory acidosis
-        "tau_bohr": (60, 180),      # CO2 time constant (s); ~80-150 physiological
-        "lag": (5, 45),            # Cold periphery / vasoconstriction
+        "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
+        "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
+        "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
         "r_offset": (-3.0, 3.0),
     },
     "RV": {
         "pao2_0": (70, 110),        # Minimal lung volume
-        "pvo2": (25, 50),           # Can drop below 30 in prolonged apnea
+        "pvo2": (20, 50),           # Can drop below 30 in prolonged apnea
         "tau_washout": (10, 80),     # Fastest washout
-        "n": (2.6, 3.2),           # Hill coefficient; varies with temperature/2,3-DPG
-        "bohr_max": (2.0, 10.0),   # Max Bohr P50 shift (mmHg); up to ~10 at respiratory acidosis
-        "tau_bohr": (60, 180),      # CO2 time constant (s); ~80-150 physiological
-        "lag": (5, 45),            # Cold periphery / vasoconstriction
+        "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
+        "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
+        "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
         "r_offset": (-3.0, 3.0),
     },
     "FL": {
-        "pao2_0": (100, 200),       # Full lungs; hyperventilation → PAO2 140-150+
-        "pvo2": (25, 50),           # Asymptotic PvO2; drops below 30 in prolonged apnea
+        "pao2_0": (100, 250),       # Full lungs; hyperventilation → PAO2 140-200+
+        "pvo2": (20, 50),           # Asymptotic PvO2; drops below 30 in prolonged apnea
         "tau_washout": (50, 250),    # Slowest washout, largest O2 reserve
-        "n": (2.6, 3.2),           # Hill coefficient; varies with temperature/2,3-DPG
-        "bohr_max": (2.0, 10.0),   # Max Bohr P50 shift (mmHg); up to ~10 at respiratory acidosis
-        "tau_bohr": (60, 180),      # CO2 time constant (s); ~80-150 physiological
-        "lag": (5, 45),            # Cold periphery / vasoconstriction → up to ~40s
+        "gamma": (0.8, 2.0),       # Steepness exponent; 1.0 = standard Severinghaus
+        "bohr_max": (2.0, 15.0),   # Max Bohr P50 shift (mmHg); up to ~15 at respiratory acidosis
+        "tau_bohr": (40, 250),      # CO2 time constant (s); ~80-150 physiological
         "r_offset": (-3.0, 3.0),
     },
 }

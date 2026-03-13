@@ -1,0 +1,385 @@
+v7.07 Results: Gamma Profile + FL#6 Washout Diagnostic
+======================================================
+
+Date: 2026-03-13
+Script: backend/scripts/experiments/exp_v7_07/exp_v7_07_gamma.py
+
+
+1. DATA RECAP
+-------------
+
+Subject: Single subject, finger pulse oximetry.
+Device: Masimo MightySat (1-Hz SpO2, HR).
+Session: 1 session, 6 breath-holds.
+2 holds excluded: FL#1 (only 2% SpO2 variation), RV#4 (nadir during apnea, -43% influence).
+4 holds used for fitting: FRC#2, RV#3, FRC#5, FL#6.
+
+Hold table:
+  FRC#2: 132 apnea + 48 recovery pts (t_end=134s), nadir at t=151s (recovery, delay=+17s)
+  RV#3:  126 apnea + 49 recovery pts (t_end=129s), nadir at t=139s (recovery, delay=+10s)
+  FRC#5: 185 apnea + 60 recovery pts (t_end=187s), nadir at t=222s (recovery, delay=+35s)
+  FL#6:  366 apnea + 38 recovery pts (t_end=372s), nadir at t=394s (recovery, delay=+22s)
+
+Excluded:
+  FL#1:  178 apnea + 5 recovery pts  (t_end=179s) - insufficient SpO2 variation
+  RV#4:  192 apnea + 56 recovery pts (t_end=193s) - nadir during apnea (structurally different)
+
+Lung volumes: FL = Functional Lung (tidal), FRC = Functional Residual Capacity,
+              RV = Residual Volume.
+
+QC flags: FRC#2 flagged as "out-of-regime" (apnea-window nadir before t_end - 2s).
+Baseline anchors: B_h = median(SpO2[t <= 20]) = 99.0 for all holds.
+
+
+2. FULL MODEL
+-------------
+
+Two-stage model: sensor calibration (Stage A) then physiology (Stage B).
+Config B only (winner from v7.06): b_s=1 fixed, CV=0.15.
+
+Stage A - Power-law latent + gamma kernel sensor model:
+  Latent SaO2(t):
+    if t <= t_turn:  latent(t) = S_min + (S_start - S_min) * (1 - (t/t_turn)^p)
+    if t > t_turn:   latent(t) = S_min + v_up * (t - t_turn)
+    where t_turn = t_end, S_start = B_h (locked)
+
+  Sensor pipeline (simplified with b_s=1):
+    filtered(t) = GammaKernel(latent, eff_lag, cv=0.15)
+    pred(t) = filtered(t)    [since B_h + 1*(filtered - B_h) = filtered]
+    eff_lag_h = max(tau_0 + delta_h, 5.0)
+
+  14 parameters: 2 global (tau_0, p) + 4 delta + 2x4 latent (S_min, v_up)
+
+  Loss: Student-t NLL (nu=4, sigma=1) on raw predictions
+        + Huber nadir timing penalty (delta=8s, lambda=500) on clipped predictions
+
+  Priors:
+    tau_0: LogNormal(log 18, 0.4), lambda=3.125
+    p: LogNormal(log 3.5, 0.35), lambda=4.08
+    delta_h: StudentT-like shrinkage (sigma=3), lambda=5
+    delta zero-sum: lambda=500
+
+  Bounds:
+    tau_0: [5, 45], p: [1.0, 5.0], delta_h: [-20, 20]
+    S_min: [30, 100], v_up: [0, 3]
+
+  Optimizer: DE popsize=40, maxiter=4000, seed=42, polish=True
+
+Stage B - Apnea-only physiology (frozen sensor):
+  PaO2(t) = PvO2 + (PaO2_0 - PvO2) * exp(-t / tau_washout)
+  P50(t) = 26.6 + 0.48 * (PaCO2_0 + k_CO2*t - 40)
+  SaO2 = Severinghaus ODC with gamma steepness
+  pred(t) = clip(GammaKernel(SaO2, eff_lag, cv=0.15), 0, 100)
+
+  PvO2 fixed at 25.0 mmHg.
+  True-frozen mode: tau_0 AND per-hold deltas frozen from Stage A.
+
+  v7.07 changes to Stage B:
+    gamma bounds: [0.8, 4.0]  (was [0.8, 2.0] in v7.06)
+    gamma prior: N(1.5, 0.5), lambda=2.0  (was N(1, 0.15), lambda=22.2)
+
+  10 parameters: k_co2, gamma + 4*(tau_washout, paco2_0)
+
+
+3. CHANGES FROM v7.06
+---------------------
+
+1. Config B only (b_s=1 fixed, CV=0.15). v7.06 proved this is the winner; no need
+   to re-test configs A and C.
+
+2. Gamma bounds widened from [0.8, 2.0] to [0.8, 4.0]. In v7.06, gamma=2.0 was at the
+   upper bound in all 3 configs.
+
+3. Gamma prior relaxed from N(1, 0.15) [lambda=22.2] to N(1.5, 0.5) [lambda=2.0].
+   The v7.06 prior was too tight and centered too low, actively fighting the data's
+   preferred value of gamma >= 2.0.
+
+4. Gamma profile likelihood: fix gamma on a grid of 9 values [0.8..4.0], refit all
+   other Stage B params at each point (no gamma prior in profile). This reveals the
+   raw loss landscape.
+
+5. FL#6 washout diagnostic: run Stage B with and without FL#6, and with widened
+   tau_washout bounds (FL: 250 -> 500), to test whether FL#6's tau_washout=250 at-bound
+   is distorting global physiology estimates.
+
+6. Seed robustness check: run Stage A with seeds {42, 123, 456} to confirm the optimizer
+   converges to the same basin regardless of initialization.
+
+
+4. RESULTS - STAGE A (FROZEN FROM v7.06 CONFIG B)
+--------------------------------------------------
+
+Converged: True, loss=1241.04
+
+Global parameters:
+  tau_0  = 17.6753  [5, 45]
+  b_s    = 1.0000   [FIXED]
+  p      = 3.3935   [1.0, 5.0]
+
+  Kernel: k=44.44, mean=17.7s, std=2.7s (cv=0.15)
+  No parameters at bounds.
+
+Per-hold breakdown:
+  FRC#2 [QC]: delta= -2.34, eff_lag=15.33, S_min=78.5, v_up=0.07
+  RV#3:       delta= -8.01, eff_lag= 9.67, S_min=51.5, v_up=0.26
+  FRC#5:      delta= +2.90, eff_lag=20.57, S_min=40.2, v_up=0.00
+  FL#6:       delta= +7.45, eff_lag=25.13, S_min=43.6, v_up=1.88
+
+Fit metrics:
+  FRC#2: R2a=0.9198, R2n=0.9138, nadir_err=+0.0s
+  RV#3:  R2a=0.9613, R2n=0.9712, nadir_err=+0.0s
+  FRC#5: R2a=0.9613, R2n=0.9851, nadir_err=+0.0s
+  FL#6:  R2a=0.9897, R2n=0.9787, nadir_err=+0.0s
+
+These match v7.06 Config B exactly (same model, same seed, same data).
+
+
+5. RESULTS - SEED ROBUSTNESS
+-----------------------------
+
+  Seed  |   tau_0  |      p   |     Loss  | Conv
+  ------+----------+----------+-----------+------
+    42  | 17.6753  |  3.3935  |  1241.04  |  Y
+   123  | 17.6753  |  3.3935  |  1241.04  |  Y
+   456  | 17.6753  |  3.3935  |  1241.04  |  Y
+
+Ranges: tau_0=0.0000s, p=0.0000, loss=0.00 (0.0%)
+VERDICT: PASS - all 3 seeds converge to the identical optimum.
+
+The Stage A loss surface has a single dominant basin. The 3-plateau structure visible
+in the tau_0 profile (from v7.06) does not cause seed sensitivity at the optimum.
+Multi-start protocol is unnecessary.
+
+
+6. RESULTS - GAMMA PROFILE (STAGE B)
+-------------------------------------
+
+Profile likelihood with gamma fixed on grid, all other Stage B params free.
+No gamma prior applied (raw loss landscape).
+
+  gamma |         Loss |   k_co2  | Conv
+  ------+--------------+----------+------
+   0.80 |     39608.18 |  0.1232  |  Y
+   1.00 |     17103.20 |  0.1565  |  Y
+   1.30 |      5570.23 |  0.1792  |  Y
+   1.60 |      4510.01 |  0.1277  |  Y
+   2.00 |      4085.78 |  0.0768  |  Y
+   2.50 |      3843.47 |  0.0360  |  Y    ** MINIMUM **
+   3.00 |      4724.49 |  0.0200  |  Y
+   3.50 |      6851.11 |  0.0200  |  Y
+   4.00 |      6590.84 |  0.0447  |  Y
+
+Profile analysis:
+  - Interior minimum at gamma=2.50 (loss=3843.47)
+  - Non-monotone profile (loss rises on both sides of minimum)
+  - The v7.06 upper bound of 2.0 was cutting off the optimum
+  - Loss at gamma=2.0 is 4086 vs 3843 at gamma=2.5 (6% improvement)
+  - k_co2 trades off with gamma: high gamma -> low k_co2 (and vice versa)
+
+Per-hold tau_washout at each gamma:
+  gamma | FRC#2 |  RV#3 | FRC#5 | FL#6
+  ------+-------+-------+-------+------
+   0.80 | 100.0 |  75.6 |  90.2 | 240.1
+   1.00 |  99.3 |  69.3 |  89.8 | 250.0  *FL#6 at bound*
+   1.30 |  88.3 |  63.3 |  85.3 | 250.0  *FL#6 at bound*
+   1.60 |  83.7 |  50.6 |  82.7 | 250.0  *FL#6 at bound*
+   2.00 |  91.2 |  50.1 |  90.4 | 250.0  *FL#6 at bound*
+   2.50 |  95.9 |  52.2 |  95.1 | 229.1
+   3.00 |  86.2 |  51.2 |  85.8 |  90.2
+   3.50 |  42.2 |  76.1 |  45.0 |  79.7
+   4.00 |  27.8 |  30.0 |  34.0 |  52.9
+
+Key observation: FL#6 tau_washout is at the 250 bound for gamma <= 2.0, then drops
+sharply as gamma increases past 2.5. The model uses FL#6's tau_washout as a sponge
+parameter to compensate for insufficient gamma. At the profile minimum (gamma=2.5),
+FL#6 tau_washout=229 is finally off the bound.
+
+
+7. RESULTS - STAGE B FREE FIT (gamma [0.8, 4.0])
+-------------------------------------------------
+
+Converged: True, loss=3753.43
+
+Global physiology:
+  k_co2  = 0.0463  [0.02, 0.25]
+  gamma  = 2.4050  [0.80, 4.00]     ** NO LONGER AT BOUND **
+
+Per-hold ICs:
+  FRC#2: tau_w=100.0 *BOUND*, paco2_0=48.9, PaO2_0=88.1
+  RV#3:  tau_w= 51.7,         paco2_0=41.1, PaO2_0=97.8
+  FRC#5: tau_w= 99.4,         paco2_0=49.9, PaO2_0=86.9
+  FL#6:  tau_w=250.0 *BOUND*, paco2_0=50.0, PaO2_0=86.7
+
+Fit metrics:
+  FRC#2: R2a=0.9346, R2n=0.4624, nadir_err=+17.0s
+  RV#3:  R2a=0.9785, R2n=0.7860, nadir_err=+0.0s
+  FRC#5: R2a=0.9782, R2n=0.9832, nadir_err=+1.0s
+  FL#6:  R2a=0.9953, R2n=0.9322, nadir_err=+0.0s
+
+FRC#2 note: R2n=0.46 is poor because Stage B doesn't model the recovery nadir well
+for this hold (nadir_err=+17s). This is a recovery-phase problem, not a gamma problem.
+The apnea fit (R2a=0.93) is good.
+
+Sponge diagnostics:
+  k_co2: 0.0463, not at bound, contraction=0.174
+  gamma: 2.4050, not at bound, contraction=0.312
+  Total at bound: 0/2 global params (CLEAN)
+
+  FRC#2 tau_washout at FRC bound (100) - structural, same as v7.06.
+  FL#6 tau_washout at FL bound (250) - still a problem, addressed in FL#6 diagnostic.
+
+
+8. RESULTS - FL#6 WASHOUT DIAGNOSTIC
+-------------------------------------
+
+Three configurations compared:
+
+  Config               |   gamma  |   k_co2  |     Loss
+  ---------------------+----------+----------+----------
+  All 4 holds          |  2.4050  |  0.0463  |  3753.43
+  Without FL#6         |  1.8945  |  0.1335  |  2780.74
+  Wide washout (500)   |  1.8624  |  0.1387  |  3526.02
+
+Sensitivity:
+  gamma change (no FL#6):       21.2%  > 10% threshold  --> FL#6 DISTORTS
+  k_co2 change (no FL#6):     188.2%
+  gamma change (wide washout):  22.6%
+
+FL#6 tau_washout with widened bounds: 376.9 (was 250.0 at bound with standard bounds).
+Even with bounds widened to 500, gamma drops from 2.40 to 1.86. This confirms FL#6
+is structurally different and is pulling gamma up and k_co2 down.
+
+Analysis: FL#6 is the longest hold (t_end=372s). Its single-exponential PaO2 decay
+model is inadequate for such long durations. The optimizer compensates by:
+  - Increasing gamma (steeper ODC) to make the model more sensitive to PaO2 changes
+  - Decreasing k_co2 (slower CO2 rise) to avoid overshooting at long durations
+  - Pushing tau_washout to the bound to slow the PaO2 washout
+
+Without FL#6, gamma=1.89 and k_co2=0.13 are much more physiologically plausible.
+The "true" gamma for the 3-hold model is around 1.9, which is close to the v7.06
+bound of 2.0 - explaining why gamma was pegging in v7.06.
+
+
+9. RESULTS - WEAK-LAG DIAGNOSTIC
+---------------------------------
+
+Frozen vs weak-lag (deltas free with sigma=2s prior):
+  k_co2: frozen=0.0463, weak=0.0445, diff=3.9%
+  gamma: frozen=2.4050, weak=2.3907, diff=0.6%
+
+Both < 5% divergence. The Stage A deltas are stable under Stage B re-optimization.
+This confirms the two-stage decomposition is clean.
+
+
+10. SPONGE DIAGNOSTICS
+-----------------------
+
+Stage A:
+  tau_0   17.6753  [5, 45]     not at bound  contraction=0.020
+  b_s      1.0000  [0.5, 2.0]  not at bound  contraction=0.133 [FIXED]
+  p        3.3935  [1.0, 5.0]  not at bound  contraction=0.175
+  Total at bound: 0/3
+
+Stage B (free fit, all 4 holds):
+  k_co2    0.0463  [0.02, 0.25]  not at bound  contraction=0.174
+  gamma    2.4050  [0.80, 4.00]  not at bound  contraction=0.312
+  Total at bound: 0/2
+
+
+11. SUCCESS CRITERIA
+--------------------
+
+1. Gamma profile has interior minimum:                  PASS (gamma_opt=2.50)
+2. Free-fit gamma is interior to bounds:                PASS (gamma=2.405, bounds [0.8, 4.0])
+3. Gamma profile NOT monotonically decreasing:          PASS (non-monotone, rises after 2.5)
+4. Seed robustness (all 3 in same basin):               PASS (identical convergence)
+5. Weak-lag divergence < 5%:                            PASS (0.6% gamma, 3.9% k_co2)
+6. No global params at bounds (Stage A):                PASS (0/3)
+7. No global params at bounds (Stage B):                PASS (0/2)
+8. FL#6 exclusion changes gamma by < 10%:               FAIL (21.2% change)
+
+Score: 7/8 PASS, 1 FAIL
+
+
+12. ANALYSIS
+------------
+
+What worked:
+  - Gamma problem is resolved for the full 4-hold model. Widening bounds from [0.8, 2.0]
+    to [0.8, 4.0] and relaxing the prior from N(1, 0.15) to N(1.5, 0.5) allows gamma to
+    find its interior optimum at ~2.4.
+  - The gamma profile clearly shows a non-monotone shape with minimum at gamma=2.5.
+    This confirms the Severinghaus+gamma parameterization is adequate; a Hill-form ODC
+    is not needed.
+  - Seed robustness is perfect. The Stage A loss surface has a single dominant basin.
+  - The two-stage decomposition is clean (weak-lag divergence < 5%).
+
+What didn't work:
+  - FL#6 is distorting gamma and k_co2. When FL#6 is excluded, gamma drops from 2.4
+    to 1.9 and k_co2 triples from 0.05 to 0.13. This is a large effect.
+  - FL#6 tau_washout is at bound (250) even in the free-fit model. Widening to 500
+    gives tau_washout=377 but still distorts gamma (1.86).
+  - The single-exponential PaO2 decay model is structurally inadequate for FL#6's
+    372-second hold duration.
+  - FRC#2 has poor nadir-window R2 (0.46) due to recovery timing, but apnea R2 is good.
+
+Comparison: v7.06 vs v7.07
+  Metric                    | v7.06 (Config B) | v7.07 (4 holds) | v7.07 (no FL#6)
+  --------------------------+------------------+-----------------+----------------
+  gamma                     | 2.00 *BOUND*     | 2.405           | 1.895
+  k_co2                     | (at bound regime)| 0.046           | 0.134
+  gamma at bound            | YES              | NO              | NO
+  FL#6 tau_w at bound       | YES (250)        | YES (250)       | N/A
+  Stage B loss              | ~1241            | 3753            | 2781
+
+Note: v7.07 losses are not directly comparable to v7.06 because the gamma prior
+changed (lambda 22.2 -> 2.0), which reduces regularization and allows higher raw loss.
+
+Key insights:
+  1. The gamma problem was caused by two factors working together:
+     (a) Bounds too tight [0.8, 2.0] cutting off the optimum at ~2.4
+     (b) Prior too tight N(1, 0.15) pulling gamma toward 1.0
+     Either fix alone would have partially helped; both together fully resolve it.
+
+  2. FL#6 is a separate structural problem. It needs either:
+     (a) A bi-exponential PaO2 decay model for long holds, or
+     (b) Exclusion from Stage B calibration (use for validation only), or
+     (c) A hold-specific gamma (not recommended - loses parsimony)
+
+  3. The "true" gamma for short/medium holds is ~1.9 (from the 3-hold model).
+     FL#6 pushes it up to ~2.4. Both are in a physiologically reasonable range
+     (steeper-than-standard ODC, consistent with Bohr effect during prolonged apnea).
+
+  4. k_co2 = 0.13 (3-hold) vs 0.05 (4-hold) is a large difference. The 3-hold value
+     is more physiologically plausible (CO2 rises ~8 mmHg/min during apnea, so
+     k_co2 = 0.13 mmHg/s = 7.8 mmHg/min, consistent with literature).
+
+
+13. RECOMMENDED NEXT STEPS
+---------------------------
+
+1. v7.08: Investigate FL#6 treatment.
+   Option A: Bi-exponential PaO2 decay for FL-type holds (adds 2 params per FL hold).
+   Option B: Exclude FL#6 from Stage B calibration, use 3-hold model (gamma~1.9, k_co2~0.13).
+   Option C: Test with FL#6 tau_washout uncapped (bounds [50, 1000]) to see if it stabilizes.
+   Recommendation: Start with Option B (simplest, most principled). FL#6 becomes a
+   validation/stress-test hold like RV#4.
+
+2. Update gamma prior to N(2.0, 0.5) [lambda=2.0] centered at the empirical optimum
+   from the 3-hold model (1.9 rounds to 2.0).
+
+3. Consider profiling k_co2 in the 3-hold model to check its identifiability.
+
+4. Do NOT switch to Hill-form ODC. The gamma profile proves the Severinghaus+gamma
+   parameterization has an interior minimum. The ODC is fine.
+
+
+14. FILES
+---------
+
+Script:  backend/scripts/experiments/exp_v7_07/exp_v7_07_gamma.py
+Results: backend/scripts/experiments/exp_v7_07/exp_v7_07_results.txt
+Plots:
+  - exp_v7_07_gamma_profile.png    (gamma profile: loss and k_co2 vs gamma)
+  - exp_v7_07_stage_b.png          (per-hold Stage B fits for best config)
+  - exp_v7_07_fl6_sensitivity.png  (FL#6 sensitivity: gamma, k_co2, loss comparison)

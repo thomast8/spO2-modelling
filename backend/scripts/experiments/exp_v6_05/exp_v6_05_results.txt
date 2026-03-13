@@ -1,0 +1,318 @@
+v6.05: Gamma-Kernel Sensor Model — Results
+============================================
+
+Date: 2026-03-05
+
+## Data Recap
+
+Subject: Thomas, healthy male, trained breath-holder
+Device: Viatom Checkme O2 Max pulse oximeter (finger sensor, 1Hz sampling)
+Session: 6 breath-hold apneas at varying lung volumes
+
+Hold Table:
+  #1 FL   178s apnea + 5 recovery pts   SpO2: 97-99%   [EXCLUDED: <2% variation]
+  #2 FRC  132s apnea + 48 recovery pts  SpO2: 78-98%   Nadir at t=151s (+17s post-apnea)
+  #3 RV   126s apnea + 49 recovery pts  SpO2: 52-98%   Nadir at t=139s (+10s post-apnea)
+  #4 RV   174s apnea + 56 recovery pts  SpO2: 41-98%   Nadir at t=168s (-5s, during apnea!)
+  #5 FRC  185s apnea + 60 recovery pts  SpO2: 41-98%   Nadir at t=222s (+35s post-apnea)
+  #6 FL   366s apnea + 38 recovery pts  SpO2: 52-98%   Nadir at t=395s (+23s post-apnea)
+
+Lung volume types:
+  FL  = Full Lungs (TLC): maximal O2 store, slowest desaturation
+  FRC = Functional Residual Capacity: moderate O2 store
+  RV  = Residual Volume: minimal O2 store, fastest desaturation
+
+
+## Full Model
+
+### Physiology Layer
+
+PaO2_0 = 149.2 - PaCO2_0/0.8             [alveolar gas equation, Aa fixed at 0]
+
+Apnea (t <= t_end):
+  PaO2(t) = PvO2 + (PaO2_0 - PvO2) * exp(-t / tau_washout)
+
+Recovery (t > t_end):
+  PaO2_end = PvO2 + (PaO2_0 - PvO2) * exp(-t_end / tau_washout)
+  PaO2(t) = P_EQ - (P_EQ - PaO2_end) * exp(-(t - t_end) / tau_reoxy)
+  where P_EQ = 100 mmHg
+
+CO2 (apnea): PaCO2(t) = PaCO2_0 + k_co2 * t
+CO2 (recovery): PaCO2(t) = 40 + (PaCO2_end - 40) * exp(-(t - t_end) / tau_clear)
+  tau_clear = 10s (fixed)
+
+### ODC Layer (Severinghaus)
+
+P50_eff(t) = 26.6 + 0.48 * (PaCO2(t) - 40)        [Bohr shift]
+PaO2_virt = PaO2 * (26.6 / P50_eff)
+PaO2_adj = 26.6 * (PaO2_virt / 26.6)^gamma          [steepness]
+SaO2 = 100 / (1 + 23400 / (PaO2_adj^3 + 150*PaO2_adj))
+
+### Sensor Layer — Gamma (Erlang) Kernel via Cascaded IIR
+
+Replaces the delay+IIR pipeline from v6.04 with a gamma-distribution impulse response,
+implemented as cascaded 1st-order IIR lowpass filters for computational efficiency.
+
+Parameterization (mean_lag, cv):
+  k_gamma = 1 / cv^2                           [shape parameter]
+  n_stages = min(round(k_gamma), 12)           [capped at 12 for speed]
+  tau_stage = mean_lag / n_stages               [per-stage time constant]
+  alpha = dt / (tau_stage + dt)                 [IIR coefficient, dt=1s]
+
+Filter (applied n_stages times in cascade):
+  s_out[n] = alpha * s_in[n] + (1-alpha) * s_out[n-1]
+  Preconditioned: s_out[-1] = s_in[0] (avoids edge transients)
+
+Per-hold shift (Exp B/C):
+  effective_mean_lag_i = max(mean_lag + delta_i, 1.0)
+
+Output: SpO2_pred = clip(s_filtered + r_offset, 0, 100)
+
+Kernel statistics:
+  Mean delay = mean_lag
+  Std dev = mean_lag * cv
+  cv=0.15 -> k~44, very peaked (near pure delay, but capped to 12 stages)
+  cv=1.0  -> k=1, exponential (maximum dispersion)
+
+### Parameters
+
+Shared (Exp A: 7, Exp B/C: 7 + 5 delta):
+  PvO2        (15, 50)     Mixed venous PO2 (mmHg)
+  k_co2       (0.02, 0.25) CO2 accumulation rate (mmHg/s)
+  r_offset    (-8, 8)      SpO2 reading offset (%) [widened from v6.04's (-3,3)]
+  tau_reoxy   (5, 30)      Re-oxygenation time constant (s)
+  mean_lag    (5, 35)      Gamma kernel mean delay (s) [replaces d]
+  cv          (0.15, 1.0)  Kernel coefficient of variation [replaces tau_f]
+  gamma       (0.8, 3.0)   ODC steepness exponent
+  [Exp B/C] delta_i  (-20, 20) per-hold mean_lag shift (s)
+
+Per-hold (2 per hold, 5 holds = 10):
+  tau_washout  varies by type  O2 washout time constant (s)
+  PaCO2_0      varies by type  Initial arterial CO2 (mmHg)
+
+Fixed constants:
+  Aa = 0 (A-a gradient, always at bound in v6.04 — removed)
+  P50_BASE = 26.6 mmHg
+  P_EQ = 100 mmHg
+  tau_clear = 10s
+
+### Loss Function
+
+SSE = sum_i [ w_i * (SpO2_obs - SpO2_pred)^2 ]     on nadir window [0, t_end+45s]
+  where w_i = 3.0 if SpO2 < 95%, else 1.0
+
+Nadir timing:  lambda_nadir * (t_nadir_pred - t_nadir_obs)^2
+CO2 priors:    lambda_k * (k_co2 - 0.06)^2 + lambda_paco2 * (paco2_0 - 40)^2
+Gamma prior:   lambda_gamma * (gamma - 1.0)^2
+mean_lag prior: lambda_mean * (mean_lag - 15.5)^2
+r_offset prior: lambda_r * r_offset^2
+IC reg:        lambda_reg * sum (IC_i - IC_type_mean)^2
+[Exp B/C]:     lambda_shrink * sum(delta_i^2)
+
+Regularization strengths:
+  lambda_nadir = 1000 (Exp C: 100), lambda_k = 2000, lambda_paco2 = 1000
+  lambda_gamma = 2000, lambda_mean = 2000, lambda_r = 500
+  lambda_reg = 10, lambda_shrink = 300
+
+
+## Changes from v6.04
+
+1. Replace delay+IIR with gamma (Erlang) convolution kernel
+2. Parameterize via (mean_lag, cv) for independent lag/dispersion control
+3. Fix Aa=0 (always at bound in v6.04 — removed from search space)
+4. Widen r_offset to (-8, 8) with quadratic prior toward 0
+5. Per-hold kernel shifts (Exp B/C) replace per-hold delay deviations
+6. Cascaded IIR implementation (n_stages capped at 12) for computational speed
+
+
+## Results
+
+### Exp A: Global Gamma Kernel (17 params)
+
+  Converged: True, nfev=1,519,668
+
+  Shared parameters:
+    pvo2      =  33.66  [15, 50]
+    k_co2     =   0.131 [0.02, 0.25]
+    r_offset  =  -1.95  [-8, 8]
+    tau_reoxy =  30.00  [5, 30]  ** AT BOUND **
+    mean_lag  =  24.82  [5, 35]
+    cv        =   0.217 [0.15, 1.0]
+    gamma     =   1.59  [0.8, 3.0]
+
+  Kernel: n_stages=12, tau_stage=2.07s, mean=24.8s, std=5.4s
+
+  Per-hold fits:
+    FRC#2: R2a=0.637, nadir_err=-1.0s
+    RV#3:  R2a=0.634, nadir_err=+3.0s
+    RV#4:  R2a=0.872, nadir_err=+16.0s
+    FRC#5: R2a=0.924, nadir_err=-21.0s
+    FL#6:  R2a=0.946, nadir_err=-10.0s
+  Avg: R2a=0.803, timing_err=10.2s
+
+
+### Exp B: Gamma Kernel + Per-Hold Shifts (22 params)
+
+  Converged: False, nfev=1,982,063
+
+  Shared parameters:
+    pvo2      =  20.16  [15, 50]
+    k_co2     =   0.071 [0.02, 0.25]
+    r_offset  =  -3.43  [-8, 8]
+    tau_reoxy =  30.00  [5, 30]  ** AT BOUND **
+    mean_lag  =  20.21  [5, 35]
+    cv        =   0.182 [0.15, 1.0]
+    gamma     =   1.68  [0.8, 3.0]
+
+  Kernel: n_stages=12, tau_stage=1.68s, mean=20.2s, std=3.7s
+
+  Per-hold shifts (base mean_lag=20.21):
+    FRC#2: delta=+4.0,  eff_lag=24.2s
+    RV#3:  delta=+2.7,  eff_lag=22.9s
+    RV#4:  delta=-11.3, eff_lag=8.9s
+    FRC#5: delta=+20.0, eff_lag=40.2s  *AT BOUND*
+    FL#6:  delta=+11.6, eff_lag=31.9s
+
+  Per-hold fits:
+    FRC#2: R2a=0.344, nadir_err=-1.0s
+    RV#3:  R2a=0.818, nadir_err=+3.0s
+    RV#4:  R2a=0.936, nadir_err=+8.0s
+    FRC#5: R2a=0.942, nadir_err=-11.0s
+    FL#6:  R2a=0.948, nadir_err=-6.0s
+  Avg: R2a=0.797, timing_err=5.8s
+
+
+### Exp C: Reduced Nadir Penalty (22 params, lambda_nadir=100)
+
+  Converged: False, nfev=1,980,959
+
+  Shared parameters:
+    pvo2      =  18.38  [15, 50]
+    k_co2     =   0.060 [0.02, 0.25]
+    r_offset  =  -1.18  [-8, 8]
+    tau_reoxy =  30.00  [5, 30]  ** AT BOUND **
+    mean_lag  =  19.60  [5, 35]
+    cv        =   0.287 [0.15, 1.0]
+    gamma     =   1.43  [0.8, 3.0]
+
+  Per-hold shifts (base mean_lag=19.60):
+    FRC#2: delta=+2.2,  eff_lag=21.8s
+    RV#3:  delta=+6.2,  eff_lag=25.8s
+    RV#4:  delta=+1.0,  eff_lag=20.6s
+    FRC#5: delta=+12.0, eff_lag=31.6s
+    FL#6:  delta=+5.9,  eff_lag=25.5s
+
+  Per-hold fits:
+    FRC#2: R2a=0.510, nadir_err=-3.0s
+    RV#3:  R2a=0.867, nadir_err=+5.0s
+    RV#4:  R2a=0.922, nadir_err=+15.0s
+    FRC#5: R2a=0.917, nadir_err=-17.0s
+    FL#6:  R2a=0.950, nadir_err=-10.0s
+  Avg: R2a=0.833, timing_err=10.0s
+
+  Self-ID test: mean_lag C (19.6) vs B (20.2) = 0.6s difference -> PASS (< 3s)
+
+
+### Mean-lag Profile (5-point sweep, Exp A structure)
+
+  mean_lag |      loss
+  ---------|----------
+       8.0 | 2,288,370
+      12.0 | 1,900,038
+      16.0 | 1,571,898
+      20.0 | 1,308,148
+      24.0 | 1,136,783
+
+  Profile: MONOTONICALLY DECREASING (degenerate, no clear minimum)
+  Minimum at mean_lag=24.0 (rightmost point tested)
+
+
+## Success Criteria Assessment
+
+  1. [Exp A] mean_lag interior:              PASS (24.8, not at bounds)
+  2. [Exp A] cv interior:                    PASS (0.22, not at bounds)
+  3. [Exp A] R2(apnea) >= 0.85:             FAIL (0.80)
+  4. [Exp B] Timing error avg <= 5s:         FAIL (5.8s, close)
+  5. [Exp B] R2(apnea) >= 0.90:             FAIL (0.80)
+  6. [Exp B] Kernel params interior:         PASS (mean_lag=20.2, cv=0.18)
+  7. [Exp C] mean_lag within 3s of Exp B:   PASS (19.6 vs 20.2 = 0.6s diff)
+  8. [Exp C] Timing error avg <= 8s:         FAIL (10.0s)
+  9. [All] k_co2 interior:                  PASS (0.06-0.13)
+ 10. [All] gamma interior:                  PASS (1.43-1.68)
+ 11. [Profile] Non-monotone:                FAIL (monotonic)
+
+
+## Analysis
+
+### What worked
+
+1. **Kernel parameterization is identifiable.** mean_lag and cv are both interior in all
+   experiments (no bound-hitting). The Exp C self-identification test passed: reducing
+   nadir penalty by 10x only shifted mean_lag by 0.6s. This is a major improvement over
+   v6.04 where tau_f always saturated at its bound.
+
+2. **cv settles at low values (0.18-0.29).** The data wants a peaked kernel (near pure
+   delay), not broad dispersion. This implies the sensor's impulse response is fairly
+   narrow — the dominant effect is a time shift, not temporal smearing.
+
+3. **Per-hold shifts capture timing heterogeneity.** Exp B's shifts show the expected
+   pattern: RV#4 needs less delay (-11s), FRC#5 needs much more (+20s, at bound).
+   The timing error improved from 10.2s (Exp A) to 5.8s (Exp B).
+
+4. **Fixing Aa=0 is correct.** No degradation from removing Aa. r_offset absorbs
+   what Aa was trying to do (small bias correction).
+
+### What didn't work
+
+1. **tau_reoxy at bound (30s) in ALL experiments.** The recovery re-oxygenation model
+   is still underspecified. The kernel doesn't fix this — it's a physiology problem.
+   The model needs either a higher tau_reoxy upper bound or a two-timescale recovery
+   (as in v6.04 Exp D).
+
+2. **R2 below targets.** Avg R2a of 0.80-0.83 is below the 0.85-0.90 targets.
+   FRC#2 is the weakest hold (R2=0.34-0.64) — its 132s apnea with moderate
+   desaturation (78%) doesn't provide enough signal for the model.
+
+3. **Profile is degenerate.** Loss monotonically decreases with mean_lag from 8 to 24.
+   This means the mean_lag prior (lambda=2000, center=15.5) is the only thing preventing
+   it from going to 35. The nadir penalty alone doesn't create a unique minimum.
+
+4. **Exp B didn't converge.** 22 params with DE popsize=30, maxiter=3000 wasn't enough.
+   FRC#5 delta at +20 bound suggests the search space needs widening or the model
+   structure needs rethinking.
+
+5. **pvo2 instability.** A gives 33.7, B gives 20.2, C gives 18.4. Large swings
+   suggest degeneracy between pvo2 and other parameters (r_offset, mean_lag).
+
+### Comparison with v6.04
+
+  Metric            | v6.04 Exp C | v6.05 Exp B
+  ------------------|-------------|------------
+  Sensor params     | d=13.3 (interior), tau_f=8.0 (AT BOUND) | mean_lag=20.2 (interior), cv=0.18 (interior)
+  Timing error avg  | 5.2s        | 5.8s
+  R2(apnea) avg     | 0.87        | 0.80
+  Convergence       | Yes         | No
+
+  v6.04 Exp C remains the best overall configuration. The gamma kernel solved the
+  identifiability problem (cv doesn't hit bounds like tau_f did) but at a cost:
+  slightly worse R2 and timing. The cascaded IIR approximation (12-stage cap) may
+  contribute to this.
+
+### Key insight
+
+The gamma kernel successfully separates mean lag from dispersion, and cv is identifiable.
+However, the data strongly prefers a peaked kernel (cv~0.2, equivalent to a narrow
+impulse response), suggesting that the sensor's temporal distortion is primarily a
+pure delay with modest smoothing — consistent with the original delay+IIR model.
+
+The real bottleneck remains the recovery physiology (tau_reoxy always at bound) and
+the nadir timing heterogeneity (FRC#5's +35s observed delay requires extreme parameters).
+
+
+## Files
+
+  exp_v6_05_kernel.py               Experiment script
+  exp_v6_05_kernel.png               Per-hold detail plots (A, B, C overlaid)
+  exp_v6_05_kernel_shape.png         Gamma kernel impulse response shapes
+  exp_v6_05_mean_lag_profile.png     mean_lag profile sweep (loss vs fixed mean_lag)
+  exp_v6_05_results.txt              This file

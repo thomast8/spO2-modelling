@@ -1,13 +1,13 @@
-"""Tests for the apnea desaturation model."""
+"""Tests for the apnea desaturation model (Severinghaus ODC)."""
 
 import numpy as np
 
 from app.services.hill_model import (
     ApneaModelParams,
     compute_r_squared,
-    hill_spo2,
     predict_spo2,
     predict_spo2_components,
+    severinghaus_spo2,
 )
 
 
@@ -17,43 +17,43 @@ def _default_params() -> ApneaModelParams:
         pao2_0=120.0,       # mmHg, full-lung pre-oxygenation
         pvo2=40.0,          # mmHg, typical mixed venous
         tau_washout=80.0,    # seconds
-        n=2.7,               # Hill coefficient
+        gamma=1.0,           # standard Severinghaus steepness
         bohr_max=5.0,        # mmHg, moderate Bohr shift
         tau_bohr=120.0,      # seconds, CO2 time constant
-        lag=19.0,            # seconds
         r_offset=0.0,        # no calibration bias
     )
 
 
-class TestHillSpo2:
-    def test_returns_50_at_p50(self):
-        """SpO2 should be 50% when PaO2 equals P50."""
-        result = hill_spo2(np.array([26.6]), p50=26.6, n=2.7)
-        assert abs(result[0] - 50.0) < 0.01
+class TestSeveringhausSpo2:
+    def test_returns_near_50_at_p50(self):
+        """SpO2 should be ~50% when PaO2 equals P50 (26.6 mmHg)."""
+        result = severinghaus_spo2(np.array([26.6]))
+        assert abs(result[0] - 49.36) < 0.5
 
     def test_high_pao2_near_100(self):
         """Very high PaO2 should give SpO2 near 100%."""
-        result = hill_spo2(np.array([200.0]), p50=26.6, n=2.7)
+        result = severinghaus_spo2(np.array([200.0]))
         assert result[0] > 99.0
 
     def test_low_pao2_near_0(self):
         """Very low PaO2 should give SpO2 near 0%."""
-        result = hill_spo2(np.array([0.1]), p50=26.6, n=2.7)
+        result = severinghaus_spo2(np.array([0.1]))
         assert result[0] < 1.0
 
     def test_monotonic_increasing(self):
         """SpO2 should increase monotonically with PaO2."""
         pao2 = np.linspace(1, 200, 100)
-        spo2 = hill_spo2(pao2, p50=26.6, n=2.7)
+        spo2 = severinghaus_spo2(pao2)
         assert np.all(np.diff(spo2) > 0)
 
-    def test_accepts_array_p50(self):
-        """hill_spo2 should work with array p50 (for Bohr effect)."""
-        pao2 = np.array([60.0, 60.0, 60.0])
-        p50 = np.array([26.0, 30.0, 34.0])
-        result = hill_spo2(pao2, p50=p50, n=2.7)
-        # Higher P50 -> lower SpO2 at same PaO2
-        assert result[0] > result[1] > result[2]
+    def test_asymmetry(self):
+        """Severinghaus should be asymmetric — steeper below P50 than above."""
+        # Slope at 20 mmHg should be steeper than at 40 mmHg (relative to P50)
+        pao2_low = np.array([19.0, 21.0])
+        pao2_high = np.array([80.0, 82.0])
+        slope_low = severinghaus_spo2(pao2_low)[1] - severinghaus_spo2(pao2_low)[0]
+        slope_high = severinghaus_spo2(pao2_high)[1] - severinghaus_spo2(pao2_high)[0]
+        assert slope_low > slope_high
 
 
 class TestPredictSpo2:
@@ -74,19 +74,41 @@ class TestPredictSpo2:
     def test_plateau_then_drop(self):
         """SpO2 should stay high during plateau, then drop steeply.
 
-        This is the key behavioral test: exponential washout + Hill sigmoid
+        This is the key behavioral test: exponential washout + Severinghaus sigmoid
         should naturally produce a flat plateau followed by steep desaturation.
         """
         params = _default_params()
         t = np.arange(0, 400, 1.0)
         spo2 = predict_spo2(t, params)
 
-        # During lag + early plateau, SpO2 should stay very high
-        plateau_mask = t < 60
+        # During early plateau, SpO2 should stay high (ODC is flat above ~80 mmHg)
+        plateau_mask = t < 30
         assert np.all(spo2[plateau_mask] > 95.0), "SpO2 should stay >95% during early plateau"
 
         # At late times, SpO2 should have dropped significantly
         assert spo2[-1] < 70.0, "SpO2 should drop well below 70% by t=400"
+
+    def test_gamma_increases_steepness(self):
+        """Higher gamma should make the ODC steeper around P50.
+
+        Above P50, higher gamma → higher SpO2 (longer plateau).
+        Below P50, higher gamma → lower SpO2 (deeper nadir).
+        The net effect is a steeper transition region.
+        """
+        base = _default_params().to_dict()
+        # Use low pvo2 so PO2 actually crosses below P50
+        base["pvo2"] = 20.0
+        base["bohr_max"] = 8.0
+        params_low = ApneaModelParams.from_dict({**base, "gamma": 1.0})
+        params_high = ApneaModelParams.from_dict({**base, "gamma": 1.5})
+
+        # At a time where PO2 is above P50, gamma>1 should give higher SpO2
+        t_early = np.array([100.0])
+        assert predict_spo2(t_early, params_high)[0] > predict_spo2(t_early, params_low)[0]
+
+        # At a very late time where virtual PO2 is below P50, gamma>1 gives lower SpO2
+        t_late = np.array([500.0])
+        assert predict_spo2(t_late, params_high)[0] < predict_spo2(t_late, params_low)[0]
 
     def test_r_offset_shifts_curve(self):
         """Positive r_offset should shift entire curve up."""
@@ -132,16 +154,16 @@ class TestPredictComponents:
         np.testing.assert_allclose(components["total"], expected, atol=0.01)
 
     def test_pao2_decreases(self):
-        """PAO2 should decrease over time (after lag)."""
+        """PAO2 should decrease over time."""
         params = _default_params()
-        t = np.linspace(20, 300, 50)
+        t = np.linspace(0, 300, 50)
         components = predict_spo2_components(t, params)
         assert np.all(np.diff(components["pao2"]) <= 0)
 
     def test_pao2_decays_toward_pvo2(self):
         """PAO2 should decay exponentially toward pvo2."""
         params = _default_params()
-        t = np.linspace(20, 600, 100)
+        t = np.linspace(0, 600, 100)
         components = predict_spo2_components(t, params)
         pao2 = components["pao2"]
 
@@ -153,7 +175,7 @@ class TestPredictComponents:
     def test_p50_eff_increases(self):
         """P50_eff should increase over time (Bohr effect)."""
         params = _default_params()
-        t = np.linspace(20, 300, 50)
+        t = np.linspace(0, 300, 50)
         components = predict_spo2_components(t, params)
         assert np.all(np.diff(components["p50_eff"]) >= 0)
 

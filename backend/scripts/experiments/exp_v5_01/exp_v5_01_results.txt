@@ -1,0 +1,313 @@
+v5.01: IIR Filter Only (No Delay) — Results
+=============================================
+
+Date: 2026-03-07
+
+
+## Data Recap
+
+Subject: Thomas, healthy male, trained breath-holder
+Device: Viatom Checkme O2 Max pulse oximeter (finger sensor, 1Hz sampling)
+Session: 6 breath-hold apneas at varying lung volumes (session 1)
+
+Hold Table:
+  #1 FL   178pts  SpO2: 97-99%   [minimal desaturation — stays above 95%]
+  #6 FL   366pts  SpO2: 57-100%  [deep desaturation over long hold]
+  #2 FRC  132pts  SpO2: 88-99%   [moderate desaturation]
+  #5 FRC  185pts  SpO2: 54-100%  [deep desaturation]
+  #3 RV   126pts  SpO2: 61-100%  [fast desaturation]
+  #4 RV   174pts  SpO2: 41-100%  [deepest desaturation]
+
+Lung volume types:
+  FL  = Full Lungs (TLC): maximal O2 store, slowest desaturation
+  FRC = Functional Residual Capacity: moderate O2 store
+  RV  = Residual Volume: minimal O2 store, fastest desaturation
+
+
+## Hypothesis
+
+Adding a low-pass IIR filter to the CO2-Bohr physiology model should absorb the
+shape compensation that gamma currently provides. If the filter "rounds the ODC
+knee" as expected, gamma should move toward 1.0 (currently 1.5-2.0 without a
+sensor model).
+
+
+## Full Model
+
+### Physiology Layer (CO2-Bohr)
+
+PAO2(t) = PvO2 + (PAO2_0 - PvO2) * exp(-t / tau_washout)
+PaCO2(t) = PaCO2_0 + k_co2 * t
+P50_eff(t) = 26.6 + 0.48 * (PaCO2(t) - 40)       [Bohr shift]
+
+### ODC Layer (Severinghaus with gamma)
+
+PaO2_virt = PAO2 * (26.6 / P50_eff)
+PaO2_adj = 26.6 * (PaO2_virt / 26.6)^gamma         [steepness exponent]
+SaO2 = 100 / (1 + 23400 / (PaO2_adj^3 + 150*PaO2_adj))
+
+### Sensor Layer (Filter variant only)
+
+alpha = dt / (tau_f + dt),   dt = 1s
+SpO2[i] = (1 - alpha) * SpO2[i-1] + alpha * SaO2[i]   [1st-order IIR]
+SpO2 = clip(SpO2 + r_offset, 0, 100)
+
+### Richards Sigmoid (Baseline)
+
+z = (t - t50) / k
+SpO2 = s_min + (s_max - s_min) / (1 + nu * exp(z))^(1/nu)
+
+
+## Model Variants
+
+1. CO2-Bohr (7p baseline):
+   pao2_0, pvo2, tau_washout, gamma, paco2_0, k_co2, r_offset
+
+2. CO2-Bohr+Filter (8p):
+   pao2_0, pvo2, tau_washout, gamma, paco2_0, k_co2, r_offset, tau_f
+
+3. Richards (5p baseline):
+   s_max, s_min, t50, k, nu
+
+
+## Parameters and Bounds
+
+Per-hold-type bounds for CO2-Bohr (7p):
+  Param        |     FL bounds |   FRC bounds |    RV bounds
+  -------------+---------------+--------------+-------------
+  pao2_0       | [100, 250]    | [80, 120]    | [70, 110]
+  pvo2         | [20, 50]      | [20, 50]     | [20, 50]
+  tau_washout  | [50, 250]     | [20, 100]    | [10, 80]
+  gamma        | [0.8, 2.0]    | [0.8, 2.0]   | [0.8, 2.0]
+  paco2_0      | [25, 45]      | [30, 45]     | [35, 50]
+  k_co2        | [0.02, 0.15]  | [0.02, 0.15] | [0.02, 0.15]
+  r_offset     | [-3, 3]       | [-3, 3]      | [-3, 3]
+
+CO2-Bohr+Filter (8p): same as above + tau_f [1, 20]
+
+Richards (5p):
+  Param   |     FL bounds |   FRC bounds |    RV bounds
+  --------+---------------+--------------+-------------
+  s_max   | [96, 101]     | [96, 101]    | [96, 101]
+  s_min   | [0, 96]       | [0, 96]      | [0, 96]
+  t50     | [50, 500]     | [20, 300]    | [10, 250]
+  k       | [5, 80]       | [3, 60]      | [3, 60]
+  nu      | [0.1, 10]     | [0.1, 10]    | [0.1, 10]
+
+Fixed constants:
+  P50_BASE = 26.6 mmHg
+  dt = 1.0s (sampling interval)
+
+### Loss Function
+
+CO2-Bohr and CO2-Bohr+Filter:
+  Weighted SSE = sum_i [ w_i * (SpO2_obs - SpO2_pred)^2 ]
+  where w_i = 3.0 if SpO2 < 95%, else 1.0
+
+Richards:
+  Unweighted SSE = sum_i (SpO2_obs - SpO2_pred)^2
+
+### Optimizer
+
+scipy.optimize.differential_evolution
+  maxiter=3000, popsize=40, tol=1e-10, seed=42
+  mutation=(0.5, 1.5), recombination=0.9, polish=True
+
+
+## Results
+
+### Per-Hold Fits
+
+  Hold    | Npts | CO2-Bohr R² | Filter R² | Richards R² | CO2-Bohr RMSE | Filter RMSE | Richards RMSE
+  --------+------+-------------+-----------+-------------+---------------+-------------+--------------
+  FL #1   |  178 |    0.7394   | -66.6743  |    0.7644   |        0.2450 |      3.9487 |       0.2330
+  FL #6   |  366 |    0.9953   |   0.9511  |    0.9952   |        0.8833 |      2.8541 |       0.8977
+  FRC #2  |  132 |    0.9487   |  -0.4700  |    0.9925   |        0.8552 |      4.5804 |       0.3280
+  FRC #5  |  185 |    0.9758   |   0.8739  |    0.9833   |        2.0062 |      4.5808 |       1.6668
+  RV #3   |  126 |    0.9837   |   0.7990  |    0.9876   |        1.3563 |      4.7583 |       1.1834
+  RV #4   |  174 |    0.9530   |   0.8984  |    0.9605   |        4.2513 |      6.2503 |       3.8970
+
+  Drop region (SpO2 < 95%) R²:
+  FL #1   |  N/A (no points below 95%)
+  FL #6   |    0.9901   |   0.9896  |    0.9889
+  FRC #2  |    0.7942   |   0.8774  |    0.9543
+  FRC #5  |    0.9505   |   0.9428  |    0.9618
+  RV #3   |    0.9710   |   0.9736  |    0.9571
+  RV #4   |    0.9162   |   0.9151  |    0.9220
+
+  Average R² (all 6 holds):
+    CO2-Bohr:       0.7660 (excluding FL#1 outlier: 0.9713)
+    CO2-Bohr+Filter: N/A meaningful average (FL#1=-66.67 dominates)
+    Richards:        0.9473 (excluding FL#1 outlier: 0.9838)
+
+### Fitted Parameters — CO2-Bohr (7p)
+
+  Hold   | pao2_0  | pvo2   | tau_wash | gamma  | paco2_0 | k_co2  | r_offset | #bound
+  -------+---------+--------+----------+--------+---------+--------+----------+-------
+  FL #1  | 250.00* | 20.00* |   99.79  | 2.000* | 25.00*  | 0.1193 |  -1.018  |  4/7
+  FL #6  | 100.00* | 42.52  |  192.05  | 2.000* | 29.68   | 0.150* |  -0.260  |  3/7
+  FRC #2 | 120.00* | 24.69  |   53.20  | 2.000* | 30.00*  | 0.020* |  -0.535  |  4/7
+  FRC #5 | 120.00* | 20.00* |  100.00* | 1.801  | 30.00*  | 0.1310 |  -1.562  |  4/7
+  RV #3  | 109.39  | 20.00* |   80.00* | 1.684  | 37.34   | 0.150* |   3.000* |  4/7
+  RV #4  | 110.00* | 20.00* |   80.00* | 1.959  | 35.00*  | 0.1054 |  -3.000* |  5/7
+  (* = at bound)
+
+### Fitted Parameters — CO2-Bohr+Filter (8p)
+
+  Hold   | pao2_0  | pvo2   | tau_wash | gamma  | paco2_0 | k_co2  | r_offset | tau_f  | #bound
+  -------+---------+--------+----------+--------+---------+--------+----------+--------+-------
+  FL #1  | 100.75  | 49.14  |  50.00*  | 2.000* | 45.00*  | 0.020* |   3.000* |  1.00* |  6/8
+  FL #6  | 188.39  | 20.00* | 250.00*  | 1.173  | 45.00*  | 0.150* |   3.000* |  1.00* |  6/8
+  FRC #2 | 120.00* | 27.84  |  39.60   | 2.000* | 30.00*  | 0.020* |   3.000* |  1.00* |  6/8
+  FRC #5 | 120.00* | 20.00* | 100.00*  | 1.666  | 30.41   | 0.1313 |  -0.229  |  1.00* |  4/8
+  RV #3  |  93.51  | 25.56  |  68.52   | 2.000* | 35.00*  | 0.150* |   3.000* |  1.00* |  5/8
+  RV #4  | 110.00* | 20.00* |  80.00*  | 1.923  | 35.00*  | 0.1088 |  -2.762  |  1.00* |  5/8
+  (* = at bound)
+
+### Fitted Parameters — Richards (5p)
+
+  Hold   | s_max   | s_min  | t50     | k      | nu     | #bound
+  -------+---------+--------+---------+--------+--------+-------
+  FL #1  |  98.96  | 95.58  | 155.38  |  5.00* | 10.00* |  2/5
+  FL #6  |  99.81  |  0.00* | 336.33  | 43.66  |  3.955 |  1/5
+  FRC #2 |  98.97  | 87.89  | 112.03  |  8.77  |  0.10* |  1/5
+  FRC #5 | 100.73  |  0.00* | 200.00  | 33.67  |  0.10* |  2/5
+  RV #3  |  99.28  |  0.00* | 109.68  |  8.85  | 10.00* |  2/5
+  RV #4  |  99.24  | 29.17  | 147.80  | 26.22  |  0.10* |  1/5
+  (* = at bound)
+
+
+### Key Parameter Summary: gamma and tau_f
+
+  Hold       | gamma(base) | gamma(filt) | tau_f  | gamma change
+  -----------+-------------+-------------+--------+-------------
+  FL #1      |    2.000*   |    2.000*   |  1.00* |   0.000
+  FL #6      |    2.000*   |    1.173    |  1.00* |  -0.828
+  FRC #2     |    2.000*   |    2.000*   |  1.00* |   0.000
+  FRC #5     |    1.801    |    1.666    |  1.00* |  -0.135
+  RV #3      |    1.684    |    2.000*   |  1.00* |  +0.316
+  RV #4      |    1.959    |    1.923    |  1.00* |  -0.037
+
+  tau_f = 1.00s (at lower bound) for ALL 6 holds.
+  gamma remains in the 1.17-2.00 range in all filter fits.
+
+
+## Analysis
+
+### Critical Finding: tau_f collapses to lower bound (1.0s) on every hold
+
+The IIR filter parameter tau_f hits its lower bound of 1.0s in all 6 holds.
+At tau_f=1.0s with dt=1.0s, alpha = 1/(1+1) = 0.5 — the filter is at its
+weakest possible setting (half-sample smoothing). The optimizer is effectively
+trying to TURN OFF the filter, not use it.
+
+This means the filter is not providing useful smoothing. Worse, it is actively
+harmful: the filter introduces a phase lag (delayed response) that shifts the
+predicted curve later in time. Since there is no delay parameter to compensate,
+the model can only offset via r_offset, which explains why r_offset saturates
+at +3.0 in 4 of 6 filter fits (it tries to compensate for the filter's vertical
+shift, not its temporal shift).
+
+### CO2-Bohr+Filter performs WORSE than CO2-Bohr baseline
+
+The filter variant degrades R² on every hold except the drop region of FRC#2:
+
+  FL #1:  R² drops from 0.739 to -66.67 (catastrophic — filter completely wrong)
+  FL #6:  R² drops from 0.995 to 0.951
+  FRC #2: R² drops from 0.949 to -0.470 (catastrophic)
+  FRC #5: R² drops from 0.976 to 0.874
+  RV #3:  R² drops from 0.984 to 0.799
+  RV #4:  R² drops from 0.953 to 0.898
+
+The catastrophic failures on FL#1 and FRC#2 (negative R²) occur because:
+- FL#1 has minimal variation (97-99% SpO2), so any filter distortion dominates
+- FRC#2 has moderate variation — the filter shifts r_offset to +3.0 to compensate
+  for the lag, which pushes the baseline prediction above 100% and clips badly
+
+### gamma does NOT move toward 1.0
+
+In the filter variant, gamma values are:
+  FL#1: 2.000 (at bound, same as baseline)
+  FL#6: 1.173 (moved toward 1.0, but at massive R² cost: 0.951 vs 0.995)
+  FRC#2: 2.000 (at bound, same as baseline)
+  FRC#5: 1.666 (slight decrease from 1.801)
+  RV#3: 2.000 (INCREASED from 1.684 — opposite of hypothesis!)
+  RV#4: 1.923 (slight decrease from 1.959)
+
+Only FL#6 shows meaningful gamma reduction, but at a catastrophic cost to overall
+fit quality. The filter is not "rounding the ODC knee" — it is introducing phase
+distortion that forces the other parameters to compensate in unphysical ways.
+
+### Why the filter fails: wrong mechanism
+
+The hypothesis assumed the filter would smooth the SaO2 curve the same way
+gamma>1 steepens and then rounds the ODC. But these operate on different axes:
+
+- gamma reshapes the SpO2-vs-PaO2 relationship (amplitude domain)
+- IIR filter smooths the SpO2-vs-time curve (time domain)
+
+The "knee rounding" effect of gamma is NOT a temporal smoothing — it's a
+nonlinear compression of the oxygen-hemoglobin dissociation curve. A linear
+time-domain filter cannot replicate a nonlinear amplitude-domain transformation.
+
+### Bounds saturation is pervasive
+
+The CO2-Bohr+Filter variant hits 4-6 bounds per hold (out of 8 parameters),
+compared to 3-5 for the CO2-Bohr baseline (out of 7). Adding tau_f increased
+the problem: r_offset compensates for filter lag by saturating at +3.0 in
+most holds, and tau_f itself saturates at 1.0 (trying to minimize its own
+effect).
+
+### Richards remains competitive with fewer parameters
+
+Richards (5p) outperforms CO2-Bohr (7p) on 4 of 6 holds (FRC#2, FRC#5, RV#3,
+RV#4) and is within 0.002 R² on FL#6. This confirms that the mechanistic
+CO2-Bohr model is still missing structural components — the empirical sigmoid
+captures the shape better with 2 fewer parameters.
+
+
+## Success Criteria Assessment
+
+1. [FAIL] gamma moves toward 1.0 with filter: gamma stays 1.17-2.00 (mostly at 2.0)
+2. [FAIL] Filter improves R² over baseline: R² DECREASES on all 6 holds
+3. [FAIL] tau_f finds interior optimum: tau_f = 1.0 (lower bound) on all holds
+4. [FAIL] Filter absorbs gamma's shape role: gamma and filter operate on different axes
+
+Overall: HYPOTHESIS REJECTED — IIR filter alone does not reduce gamma.
+
+
+## Conclusions
+
+1. **The filter actively hurts performance.** Adding an IIR low-pass filter to
+   CO2-Bohr degrades R² on every hold, sometimes catastrophically (FL#1, FRC#2).
+   The optimizer drives tau_f to its lower bound in all cases, effectively trying
+   to eliminate the filter.
+
+2. **gamma and the filter address different phenomena.** gamma reshapes the ODC
+   in the amplitude domain (SpO2 vs PaO2), while the IIR filter smooths in the
+   time domain (SpO2 vs t). A linear temporal filter cannot replicate a nonlinear
+   amplitude-domain transformation. The hypothesis that one could substitute for
+   the other was incorrect.
+
+3. **A filter without delay is counterproductive.** The IIR filter introduces a
+   temporal lag but no explicit delay mechanism. The model tries to compensate
+   with r_offset (vertical shift), which is the wrong degree of freedom. This
+   suggests that if a sensor model is to help, it needs an explicit delay
+   component first, with smoothing secondary.
+
+4. **Bounds saturation indicates model misspecification.** The filter variant
+   hits 4-6 of 8 bounds per hold. The optimizer is fighting the model structure,
+   not finding a useful solution within it.
+
+5. **This motivates Exp 2: adding delay alongside filter.** The key missing
+   ingredient is a temporal delay (pure shift in time) that accounts for the
+   known ~10-30s lag of finger pulse oximeters. The filter can then provide
+   additional smoothing on top of the delay, rather than trying to accomplish
+   both roles simultaneously.
+
+
+## Files
+
+  exp_v5_01_filter_only.py       Experiment script
+  exp_v5_01_filter_only.png      Per-hold fit comparison plot (6 panels)
+  exp_v5_01_results.txt          This file

@@ -5,18 +5,19 @@ Exponential Alveolar Washout + Saturating Bohr Effect Model
 Models SpO2 desaturation during breath-hold apnea using:
 - Exponential PAO2 decline (alveolar-capillary O2 equilibration)
 - Saturating Bohr effect (CO2 accumulation with exponential saturation)
-- Hill equation oxygen-haemoglobin dissociation curve
+- Severinghaus (1979) oxygen-haemoglobin dissociation curve with gamma steepness
 
 Model structure:
-    t_eff      = max(t - lag, 0)
-    PAO2(t)    = pvo2 + (pao2_0 - pvo2) * exp(-t_eff / tau_washout)
-    P50_eff(t) = P50_BASE + bohr_max * (1 - exp(-t_eff / tau_bohr))
-    SpO2(t)    = clip(r_offset + 100 * PAO2^n / (PAO2^n + P50_eff^n), 0, 100)
+    PAO2(t)      = pvo2 + (pao2_0 - pvo2) * exp(-t / tau_washout)
+    P50_eff(t)   = P50_BASE + bohr_max * (1 - exp(-t / tau_bohr))
+    PAO2_virtual = PAO2 * (P50_BASE / P50_eff)          [Bohr shift]
+    PAO2_adj     = P50_BASE * (PAO2_virtual / P50_BASE)^gamma  [steepness]
+    SpO2(t)      = clip(r_offset + 100 / (1 + 23400/(PAO2_adj^3 + 150*PAO2_adj)), 0, 100)
 
 P50_BASE (26.6 mmHg) is a fixed haemoglobin biochemistry constant.
-n (Hill coefficient) is fitted within a tight physiological range (2.6-3.0).
-The saturating Bohr effect replaces the linear model to prevent unphysical
-P50 growth at long apnea durations.
+gamma (steepness exponent) is fitted — 1.0 = standard Severinghaus, >1 = steeper.
+The Severinghaus equation naturally captures the asymmetric ODC shape
+(steeper in 40-80 mmHg) that the symmetric Hill equation cannot.
 """
 
 from dataclasses import asdict, dataclass, fields
@@ -38,10 +39,9 @@ class ApneaModelParams:
     pao2_0: float       # Initial alveolar PO2 (mmHg)
     pvo2: float         # Mixed venous PO2, asymptotic floor (mmHg)
     tau_washout: float   # Exponential O2 washout time constant (seconds)
-    n: float             # Hill coefficient (Hb cooperativity, ~2.6-3.0)
+    gamma: float         # Steepness exponent (1.0 = standard Severinghaus, >1 steeper)
     bohr_max: float      # Maximum Bohr P50 shift (mmHg)
     tau_bohr: float      # CO2 accumulation time constant (seconds)
-    lag: float           # Finger-to-arterial circulation delay (seconds)
     r_offset: float      # Constant SpO2 offset for sensor calibration (%)
 
     def to_dict(self) -> dict:
@@ -69,19 +69,16 @@ class ApneaModelParams:
         return np.array([getattr(self, f.name) for f in fields(self)])
 
 
-def hill_spo2(
-    pao2: np.ndarray,
-    p50: np.ndarray | float,
-    n: float,
-) -> np.ndarray:
-    """Oxygen-haemoglobin dissociation curve (Hill equation).
+def severinghaus_spo2(pao2: np.ndarray) -> np.ndarray:
+    """Severinghaus (1979) ODC: PO2 → SpO2 (%).
 
-    Returns SpO2 in % given PaO2 (mmHg) and P50 (mmHg).
-    Both pao2 and p50 can be arrays (numpy broadcasting applies).
+    SO2 = 100 / (1 + 23400/(PO2^3 + 150*PO2))
+
+    Standard empirical formula for the oxygen-haemoglobin dissociation curve.
+    Naturally captures the asymmetric shape (steeper in 40-80 mmHg range).
     """
-    pao2 = np.maximum(pao2, 0.01)
-    p50 = np.maximum(p50, 0.01)
-    return 100.0 * (pao2**n) / (pao2**n + p50**n)
+    x = np.maximum(pao2, 0.01)
+    return np.clip(100.0 / (1.0 + 23400.0 / (x**3 + 150.0 * x)), 0.0, 100.0)
 
 
 def predict_spo2(t: np.ndarray, params: ApneaModelParams) -> np.ndarray:
@@ -94,20 +91,26 @@ def predict_spo2(t: np.ndarray, params: ApneaModelParams) -> np.ndarray:
     Returns:
         Predicted SpO2 (%) array, same shape as t
     """
-    t_eff = np.maximum(t - params.lag, 0.0)
-
     # Exponential PAO2 decline (alveolar-capillary equilibration)
     pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
-        -t_eff / max(params.tau_washout, 0.01)
+        -t / max(params.tau_washout, 0.01)
     )
 
     # Saturating Bohr effect: CO2 accumulates with exponential saturation
     p50_eff = ApneaModelParams.P50_BASE + params.bohr_max * (
-        1.0 - np.exp(-t_eff / max(params.tau_bohr, 0.01))
+        1.0 - np.exp(-t / max(params.tau_bohr, 0.01))
     )
 
-    # Hill equation with dynamic P50
-    spo2 = params.r_offset + hill_spo2(pao2, p50_eff, params.n)
+    # Virtual PO2 for Bohr effect: right-shifts the ODC
+    pao2_virtual = pao2 * (ApneaModelParams.P50_BASE / p50_eff)
+
+    # Power transform for steepness: preserves P50 crossing, adjusts slope
+    pao2_adj = ApneaModelParams.P50_BASE * (
+        (np.maximum(pao2_virtual, 0.01) / ApneaModelParams.P50_BASE) ** params.gamma
+    )
+
+    # Severinghaus equation with steepness-adjusted PO2
+    spo2 = params.r_offset + severinghaus_spo2(pao2_adj)
     return np.clip(spo2, 0.0, 100.0)
 
 
@@ -119,16 +122,20 @@ def predict_spo2_components(
 
     Returns dict with keys: total, base, pao2, p50_eff
     """
-    t_eff = np.maximum(t - params.lag, 0.0)
-
     pao2 = params.pvo2 + (params.pao2_0 - params.pvo2) * np.exp(
-        -t_eff / max(params.tau_washout, 0.01)
+        -t / max(params.tau_washout, 0.01)
     )
     p50_eff = ApneaModelParams.P50_BASE + params.bohr_max * (
-        1.0 - np.exp(-t_eff / max(params.tau_bohr, 0.01))
+        1.0 - np.exp(-t / max(params.tau_bohr, 0.01))
     )
 
-    spo2_base = hill_spo2(pao2, p50_eff, params.n)
+    # Virtual PO2 for Bohr effect + power transform for steepness
+    pao2_virtual = pao2 * (ApneaModelParams.P50_BASE / p50_eff)
+    pao2_adj = ApneaModelParams.P50_BASE * (
+        (np.maximum(pao2_virtual, 0.01) / ApneaModelParams.P50_BASE) ** params.gamma
+    )
+
+    spo2_base = severinghaus_spo2(pao2_adj)
     spo2_total = np.clip(spo2_base + params.r_offset, 0.0, 100.0)
 
     return {

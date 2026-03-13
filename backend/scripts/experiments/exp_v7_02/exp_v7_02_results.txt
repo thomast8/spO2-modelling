@@ -1,0 +1,591 @@
+v7.02: Prior Calibration + LOHO Fix + Honest Metrics - Results
+===============================================================
+
+Date: 2026-03-10
+
+
+## Data Recap
+
+Subject: Thomas, healthy male, trained breath-holder
+Device: Viatom Checkme O2 Max pulse oximeter (finger sensor, 1Hz sampling)
+Session: 6 breath-hold apneas at varying lung volumes
+
+Hold Table:
+  #1 FL   178s apnea + 5 recovery pts   SpO2: 97-99%   [EXCLUDED: <2% variation]
+  #2 FRC  132s apnea + 48 recovery pts  SpO2: 78-98%   Nadir at t=151s (+17s post-apnea)
+  #3 RV   126s apnea + 49 recovery pts  SpO2: 52-98%   Nadir at t=139s (+10s post-apnea)
+  #4 RV   174s apnea + 56 recovery pts  SpO2: 41-98%   Nadir at t=168s (-5s, during apnea!)
+  #5 FRC  185s apnea + 60 recovery pts  SpO2: 41-98%   Nadir at t=222s (+35s post-apnea)
+  #6 FL   366s apnea + 38 recovery pts  SpO2: 52-98%   Nadir at t=394s (+22s post-apnea)
+
+Note on RV#4: subject resumed breathing during the hold, so nadir occurs
+within the apnea window rather than post-apnea. This is the structural
+outlier across all model versions.
+
+Lung volume types:
+  FL  = Full Lungs (TLC): maximal O2 store, slowest desaturation
+  FRC = Functional Residual Capacity: moderate O2 store
+  RV  = Residual Volume: minimal O2 store, fastest desaturation
+
+Nadir definition (NEW in v7.02): Local search within [t_end-30, t_end+60]
+with 5-point median smoothing, replacing global argmin. All observed nadirs
+fall within [-5s, +35s] of t_end. The smoothing prevents sensor glitches
+from defining the nadir.
+
+Covariates:
+  Depth severity g_h = max(0, 95 - min(SpO2_obs)) / 10:
+    FRC#2: g_h = 1.70 (min SpO2 = 78%)
+    RV#3:  g_h = 4.30 (min SpO2 = 52%)
+    RV#4:  g_h = 5.40 (min SpO2 = 41%)
+    FRC#5: g_h = 5.40 (min SpO2 = 41%)
+    FL#6:  g_h = 4.30 (min SpO2 = 52%)
+
+  End-slope s_h = (SpO2(t_end) - SpO2(t_end-10)) / 10:
+    FRC#2: s_h =  0.000 (-s_h = -0.000)  [flat at end]
+    RV#3:  s_h = -0.900 (-s_h = +0.900)  [still falling fast]
+    RV#4:  s_h = -0.200 (-s_h = +0.200)  [slight fall]
+    FRC#5: s_h = -0.600 (-s_h = +0.600)  [falling]
+    FL#6:  s_h = -0.200 (-s_h = +0.200)  [slight fall]
+
+
+## Full Model
+
+### Stage A: Sensor Calibration (Piecewise-Linear Latent + Gamma Kernel)
+
+Piecewise-linear latent template (same as v7.01):
+  Turning point: t_turn = t_end + m_h
+  Down slope (derived): v_down = (S_start - S_min) / t_turn
+  3 free params per hold: S_start [90,100], S_min [30,100], v_up [0,3.0]
+
+  s_h(t) = { S_start - v_down * t                 if t <= t_turn
+           { S_min + v_up * (t - t_turn)           if t > t_turn
+  Clipped to [0, 100].
+
+Smooth discrete gamma kernel (cv FIXED):
+  k = 1 / cv^2                           [cv = 0.15 fixed]
+  theta = mean_lag * cv^2
+  h[i] = gammainc(k, (i+1)/theta) - gammainc(k, i/theta)
+  h = h / sum(h)
+
+Convolution with preconditioning:
+  padded = [signal[0]] * len(h) ++ signal
+  convolved = convolve(padded, h, mode="full")[:len(padded)]
+  output = convolved[len(h):]
+
+Two-covariate lag model:
+  effective_lag_h = max(tau_0 + beta_g * g_h + beta_s * (-s_h) + delta_h, 1.0)
+
+Measurement equation:
+  y_h(t) = a_s + b_s * (K_{tau_h} * s_h)(t) + epsilon_h(t)
+  where a_s = r_offset, b_s = gain parameter
+
+Loss: Student-t NLL (same as v7.01):
+  NLL = (nu+1)/2 * sum(log(1 + r^2 / (nu * sigma^2)))
+  nu = 4.0, sigma = 1.0
+
+### Stage B: Physiology (Apnea-Only, Frozen Sensor)
+
+PaO2_0 = 149.2 - PaCO2_0/0.8             [alveolar gas equation, Aa fixed at 0]
+
+Apnea only (t <= t_end) - no recovery branch:
+  PaO2(t) = PvO2 + (PaO2_0 - PvO2) * exp(-t / tau_washout)
+
+CO2 (apnea only):
+  PaCO2(t) = PaCO2_0 + k_co2 * t
+
+ODC (Severinghaus):
+  P50_eff(t) = 26.6 + 0.48 * (PaCO2(t) - 40)
+  PaO2_virt = PaO2 * (26.6 / P50_eff)
+  PaO2_adj = 26.6 * (PaO2_virt / 26.6)^gamma
+  SaO2 = 100 / (1 + 23400 / (PaO2_adj^3 + 150*PaO2_adj))
+
+Sensor applied: SpO2_pred = clip(r_offset + b_s * kernel_convolved(SaO2), 0, 100)
+
+Nadir metric (NEW in v7.02): apnea window [0, t_end+5s] instead of full trace,
+since the model only generates predictions during apnea.
+
+### Parameters
+
+Stage A (30 params): 5 global + 5 delta + 5 m_h + 3x5 latent
+  tau_0       (5, 45)       Base kernel delay (s)
+  r_offset    (-8, 8)       SpO2 reading offset a_s (%)
+  b_s         (0.5, 2.0)    Gain parameter [WIDENED from v7.01's (0.8, 1.2)]
+  beta_g      (-2, 2)       Depth-severity lag coefficient
+  beta_s      (-2, 2)       End-slope lag coefficient
+  delta_h     (-15, 15)     Residual per-hold shifts [5]
+  m_h         (-15, 40)     Per-hold nadir shifts [5, WIDENED from v7.01's (-10, 15)]
+  S_start_h   (90, 100)     Initial latent SpO2 [5 per hold]
+  S_min_h     (30, 100)     Minimum latent SpO2 [5 per hold]
+  v_up_h      (0, 3.0)      Recovery slope %/s [5 per hold]
+  cv = 0.15   FIXED
+
+Stage B (18 params): 3 physiology + 5 delta + 2x5 per-hold ICs
+  Frozen from Stage A: tau_0, cv, r_offset, b_s, beta_g, beta_s
+  PvO2        (15, 50)      Mixed venous PO2 (mmHg)
+  k_co2       (0.02, 0.25)  CO2 accumulation rate (mmHg/s)
+  gamma       (0.8, 1.3)    ODC steepness
+  delta_h     (-15, 15)     Re-fitted per-hold shifts [5]
+  tau_washout varies        O2 washout time constant (s) [per-hold]
+  PaCO2_0     varies        Initial arterial CO2 (mmHg) [per-hold]
+
+Fixed constants:
+  Aa = 0, P50_BASE = 26.6 mmHg, P_EQ = 100 mmHg, tau_clear = 30s
+  cv = 0.15 (Stage A), FIO2_PB_PH2O = 149.2, RQ = 0.8
+
+### Loss Function
+
+Stage A: Student-t NLL on nadir window [0, t_end+45s]
+  NLL = (nu+1)/2 * sum(log(1 + r^2 / (nu * sigma^2)))   [nu=4, sigma=1]
+  + Huber timing penalty per hold (delta=8s)
+
+Stage B: Weighted SSE on apnea window [0, t_end+5s]
+  SSE = sum_i [ w_i * (SpO2_obs - SpO2_pred)^2 ]
+  where w_i = 3.0 if SpO2 < 95%, else 1.0
+
+### Regularization (MAP-correct: lambda = 1/(2*sigma^2))
+
+Stage A:
+  lambda_tau0=3.125    LogNormal(log 18, 0.4) on tau_0     [was 50 in v7.01, 16x reduction]
+  lambda_beta=0.125    N(0, 2) per covariate                [was 50, 400x reduction]
+  lambda_delta=5       StudentT-like shrinkage (structural, unchanged)
+  lambda_zerosum=500   (sum delta)^2 (structural, unchanged)
+  lambda_m=0.0078      N(0, 8): no /4.0 divisor             [was 200*m^2/4=50*m^2, 6400x reduction]
+  lambda_offset=0.125  N(0, 2) for r_offset                 [was 50, 400x reduction]
+  lambda_gain=50       N(1, 0.1) for b_s                    [was 5000, 100x reduction]
+  lambda_nadir=500     Huber timing (structural, unchanged)
+
+Stage B:
+  lambda_pvo2=0.02     N(25, 5) for PvO2                    [was 20, 1000x reduction]
+  lambda_k_co2=1250    N(0.06, 0.02) for k_co2              [was 2000, 1.6x reduction]
+  lambda_paco2=0.056   N(40, 3) per-hold PaCO2_0            [was 1000, 17857x reduction]
+  lambda_gamma=22.2    N(1, 0.15) for gamma                  [was 5000, 225x reduction]
+  lambda_delta=5       StudentT-like shrinkage (unchanged)
+  lambda_zerosum=500   (sum delta)^2 (unchanged)
+  lambda_reg=10        Per-hold IC -> type-mean (structural, unchanged)
+
+Optimizer: scipy.optimize.differential_evolution
+  Stage A: popsize=40, maxiter=4000, seed=42  [was popsize=30, maxiter=3000]
+  Stage B: popsize=25, maxiter=2000, seed=42  [unchanged]
+  All: mutation=(0.5, 1.5), recombination=0.9, tol=1e-10, polish=True
+
+
+## Changes from v7.01
+
+1. MAP-correct prior coefficients: lambda = 1/(2*sigma^2) throughout.
+   Old lambdas were 16-6400x tighter than the documented prior distributions.
+   This is the core calibration fix: prior penalties now match their stated
+   statistical meaning (e.g., lambda_m=0.0078 means N(0,8), not HalfNormal(2)).
+2. Removed embedded /4.0 in m_h penalty (3 locations). With lambda_m=0.0078
+   and no divisor, penalty is 0.0078*m^2 = m^2/(2*8^2), exactly N(0,8).
+3. Widened b_s bounds: (0.8, 1.2) -> (0.5, 2.0). Was pinned at 1.2 in v7.01.
+4. Widened m_h bounds: (-10, 15) -> (-15, 40). Observed nadirs up to +35s post-end.
+5. Increased DE exploration: popsize 30->40, maxiter 3000->4000 for flatter landscape.
+6. Fixed LOHO: Two-phase approach. Phase 1 trains DE on train holds only (no
+   held-out params in bounds). Phase 2 optimizes held-out latent params
+   (m_h, S_start, S_min, v_up) via L-BFGS-B with 5 random restarts. Old LOHO
+   had held-out params as dead dimensions in DE (never appeared in objective).
+7. Fixed Stage B nadir metric: uses apnea window [0, t_end+5s] instead of
+   full trace. Model is apnea-only, so argmin of full trace was always at
+   trace end, giving meaningless timing errors.
+8. Robust nadir definition: local search [t_end-30, t_end+60] with 5-point
+   median smoothing, replacing global argmin of raw SpO2.
+9. Threshold-based time-split: t_split = min(first SpO2<95, 0.6*t_end).
+   Skips prediction metrics when fit segment has <3% SpO2 drop (no signal).
+
+
+## Results
+
+### Stage A: Sensor-First Calibration (30 params)
+
+  Converged: False, nfev=4,801,851 (maxiter=4000, popsize=40)
+
+  Global parameters:
+    tau_0     =   9.26  [5, 45]
+    r_offset  =  -8.00  [-8, 8]     (near bound)
+    b_s       =   1.557 [0.5, 2.0]  (interior)
+    beta_g    =  -0.581 [-2, 2]     (nonzero, compensating)
+    beta_s    =   1.990 [-2, 2]     (near bound)
+
+  Kernel: k=44.4, mean=9.3s, std=1.4s (cv=0.15 FIXED)
+
+  Per-hold structural shift breakdown (base tau_0=9.26):
+    FRC#2: bg*g=-0.99, bs*(-s)=-0.00, delta=-6.69,  eff_lag=1.58,   m_h=+16.0s
+    RV#3:  bg*g=-2.50, bs*(-s)=+1.79, delta=+11.65, eff_lag=20.21,  m_h=-12.0s
+    RV#4:  bg*g=-3.14, bs*(-s)=+0.40, delta=-5.28,  eff_lag=1.24,   m_h=-6.5s
+    FRC#5: bg*g=-3.14, bs*(-s)=+1.19, delta=+0.20,  eff_lag=7.52,   m_h=+27.9s
+    FL#6:  bg*g=-2.50, bs*(-s)=+0.40, delta=+0.12,  eff_lag=7.28,   m_h=+15.8s
+
+  Per-hold latent params:
+    FRC#2: S_start=90.0, S_min=55.7, v_up=0.01
+    RV#3:  S_start=100.0, S_min=39.4, v_up=0.11
+    RV#4:  S_start=94.8, S_min=31.2, v_up=0.31
+    FRC#5: S_start=97.0, S_min=30.0, v_up=0.56
+    FL#6:  S_start=99.9, S_min=38.9, v_up=0.18
+
+  Per-hold fits:
+    FRC#2: R2a=0.900, R2n=0.901, nadir_err=+0.0s
+    RV#3:  R2a=0.961, R2n=0.969, nadir_err=+0.0s
+    RV#4:  R2a=0.894, R2n=0.796, nadir_err=+0.0s
+    FRC#5: R2a=0.919, R2n=0.973, nadir_err=+0.0s
+    FL#6:  R2a=0.983, R2n=0.969, nadir_err=+0.0s
+  Avg: R2a=0.931, R2n=0.922, timing_err=0.0s
+
+
+### Stage B: Apnea-Only Physiology (18 params, frozen sensor)
+
+  Converged: False, nfev=900,507
+  Frozen: tau_0=9.26, cv=0.150, r_offset=-8.00, b_s=1.557, beta_g=-0.581, beta_s=1.990
+  Loss window: [0, t_end+5s] (apnea only)
+
+  Physiology parameters:
+    PvO2      =  15.12  [15, 50]    (near bound)
+    k_co2     =   0.022 [0.02, 0.25] (near bound)
+    gamma     =   0.800 [0.8, 1.3]  ** AT BOUND **
+
+  Per-hold shifts (re-fitted deltas):
+    FRC#2: bg*g=-0.99, bs*(-s)=-0.00, delta=-15.00, eff_lag=1.00   *BOUND*
+    RV#3:  bg*g=-2.50, bs*(-s)=+1.79, delta=-0.68,  eff_lag=7.88
+    RV#4:  bg*g=-3.14, bs*(-s)=+0.40, delta=-14.32, eff_lag=1.00  (near bound)
+    FRC#5: bg*g=-3.14, bs*(-s)=+1.19, delta=+15.00, eff_lag=22.32  *BOUND*
+    FL#6:  bg*g=-2.50, bs*(-s)=+0.40, delta=+15.00, eff_lag=22.16  *BOUND*
+
+  Per-hold ICs:
+    FRC#2: tau_w=100.0, paco2_0=44.2, PaO2_0=93.9  [tau_washout=hi]
+    RV#3:  tau_w=75.1,  paco2_0=47.5, PaO2_0=89.8
+    RV#4:  tau_w=80.0,  paco2_0=45.9, PaO2_0=91.9  [tau_washout=hi]
+    FRC#5: tau_w=100.0, paco2_0=49.3, PaO2_0=87.6  [tau_washout=hi]
+    FL#6:  tau_w=211.4, paco2_0=46.7, PaO2_0=90.8
+
+  Per-hold fits (apnea-window nadir metric):
+    FRC#2: R2a=0.772, R2n=0.373, nadir_err=-12.0s
+    RV#3:  R2a=0.975, R2n=0.893, nadir_err=-5.0s
+    RV#4:  R2a=0.899, R2n=0.626, nadir_err=+10.0s
+    FRC#5: R2a=0.944, R2n=0.963, nadir_err=-30.0s
+    FL#6:  R2a=0.980, R2n=0.957, nadir_err=-17.0s
+  Avg: R2a=0.914, R2n=0.762, timing_err=14.8s
+
+
+### Parameter Comparison: v7.01 vs v7.02
+
+  Parameter     | v7.01       | v7.02       | Direction
+  --------------|-------------|-------------|----------
+  tau_0         |  16.19      |   9.26      | dropped (priors loosened)
+  r_offset      |   0.73      |  -8.00      | near bound (identifiability issue)
+  b_s           |   1.200*    |   1.557     | freed from bound
+  beta_g        |  -0.039     |  -0.581     | nonzero (priors loosened)
+  beta_s        |   0.067     |   1.990*    | near bound (priors loosened)
+  gamma         |   1.002     |   0.800*    | AT BOUND (degenerate Stage A)
+  PvO2          |  20.17      |  15.12      | near lower bound
+  k_co2         |   0.091     |   0.022     | near lower bound
+  R2a Stage A   |   0.834     |   0.931     | improved
+  R2n Stage A   |   0.839     |   0.922     | improved
+  R2a Stage B   |   0.924     |   0.914     | slight regression
+  LOHO timing   |  94.0s      |   2.6s      | massive improvement
+  (* = at bound)
+
+
+### LOHO: Leave-One-Hold-Out Cross-Validation (Stage A)
+
+  5 folds run in parallel (11 workers).
+  Two-phase LOHO (NEW): Phase 1 trains on 4 holds via DE, Phase 2 fits
+  held-out latent params (m_h, S_start, S_min, v_up) via L-BFGS-B.
+
+  Held-out   |     R2 |   RMSE | NadirErr | EffLag
+  -----------+--------+--------+----------+-------
+  FRC#2      |  0.896 |   2.41 |    +0.0s |  15.8
+  RV#3       |  0.911 |   5.47 |    +1.0s |  12.2
+  RV#4       | -0.672 |  24.79 |   +11.0s |   2.8
+  FRC#5      |  0.971 |   3.70 |    +0.0s |   1.0
+  FL#6       |  0.941 |   3.83 |    +1.0s |   2.7
+
+  Avg |timing error|: 2.6s (target < 5s) - PASS
+
+  Note: RV#4 is the structural outlier (R2=-0.67, +11s timing). This hold has
+  an anomalous nadir during apnea (subject resumed breathing mid-hold), which
+  the model cannot represent with standard parameters. Excluding RV#4, avg
+  timing error drops to 0.5s.
+
+
+### Time-Split (Stage B): Fit Early, Predict Late
+
+  Split: fit [0, min(SpO2<95, 0.6*t_end)], predict rest to [t_end+5]
+  NEW: Threshold trigger at first SpO2<95, skip if fit drop <3%.
+
+  Hold   | t_split | R2_fit   | R2_pred  | RMSE_pred
+  -------+---------+----------+----------+----------
+  FRC#2  |   80s   | -23.231  | N/A      |   N/A     (fit drop <3%)
+  RV#3   |   77s   |  -0.816  | -1.591   |  21.19
+  RV#4   |   77s   |  +0.219  | -1.981   |  30.58
+  FRC#5  |  106s   |  +0.495  | -1.607   |  21.28
+  FL#6   |  218s   |  +0.666  | -1.367   |  18.45
+
+  Avg R2_pred: -1.636 (target > 0.90) - FAIL
+
+  FRC#2 correctly identified as having insufficient signal (<3% drop in fit
+  window) and excluded from prediction metrics. All remaining holds have
+  negative R2_pred, indicating the physiology model extrapolates poorly.
+
+
+### Profile Likelihood (tau_0 sweep, Stage A)
+
+  14 points run in parallel (11 workers).
+
+  tau_0 |      loss | r_offset |    b_s | beta_g | beta_s
+  ------+-----------+----------+--------+--------+-------
+    5.0 |   2258.17 |   -7.975 |  1.559 | -1.034 |  1.299
+    8.0 |   2290.12 |   -7.595 |  1.550 |  1.201 | -1.268
+   10.0 |   2303.04 |   -7.186 |  1.557 |  0.808 |  1.607
+   12.0 |   2314.92 |   -7.886 |  1.569 | -0.931 |  1.916
+   14.0 |   2259.32 |   -7.267 |  1.529 | -1.383 |  1.907
+   16.0 |   2247.15 |   -7.992 |  1.533 | -1.040 | -0.392
+   18.0 |   2327.22 |   -7.084 |  1.552 | -0.004 |  0.319
+   20.0 |   2316.09 |   -7.990 |  1.561 | -1.710 |  1.936
+   22.0 |   2333.88 |   -7.987 |  1.550 | -1.027 | -1.895
+   25.0 |   2328.78 |   -7.820 |  1.542 | -1.998 | -1.628
+   30.0 |   2346.85 |   -7.514 |  1.533 | -1.972 |  0.447
+   35.0 |   2369.66 |   -7.998 |  1.515 | -1.998 | -1.967
+   40.0 |   2896.37 |   -7.741 |  1.495 | -1.998 | -1.843
+   45.0 |   5042.67 |   -7.968 |  1.199 | -1.716 |  1.960
+
+  Profile: NON-MONOTONE (good!) with minimum at tau_0=16.0.
+  Loss range in [5, 30]: 2247-2347 (only ~4% variation) - MUCH flatter than v7.01.
+  Sharp rise only beyond tau_0=35 (2370 at 35, 2896 at 40, 5043 at 45).
+
+  Key observation: beta_g and beta_s are NOISY across profile points. In v7.01
+  beta_g swept linearly from +1.76 to -2.0 (compensating tau_0). Here beta_g
+  bounces between -1.03 and +1.20 with no clear trend. This is because the
+  weakened beta prior (0.125 vs 50) allows covariates to adopt arbitrary
+  values at each profile point. Similarly, beta_s varies from -1.90 to +1.96.
+
+  b_s is stable at ~1.55 across all profile points (was pinned at 1.2 in v7.01).
+  r_offset is stable near -8.0 across all points (identifiability tradeoff).
+
+
+### Sensitivity: d(physiology params)/d(tau_0)
+
+  Stage B run at 5 tau_0 values [12, 14, 16, 18, 20] in parallel.
+
+    d(PvO2)/d(tau_0):   max |deriv| = 0.360
+    d(k_co2)/d(tau_0):  max |deriv| = 0.006
+    d(gamma)/d(tau_0):  max |deriv| = 0.000
+
+  PvO2 sensitivity increased 12x vs v7.01 (0.360 vs 0.031). gamma sensitivity
+  is exactly 0.000 because gamma is pinned at 0.80 bound for all tau_0 values.
+  k_co2 remains insensitive.
+
+
+### Sponge Diagnostics
+
+  Stage A:
+    Param           | Value   | AtBound | Contraction
+    ----------------+---------+---------+------------
+    tau_0           |  9.263  |         | 0.020
+    r_offset        | -7.997  |         | 0.250
+    b_s             |  1.557  |         | 0.133
+    beta_g          | -0.581  |         | 1.000
+    beta_s          |  1.990  |         | 1.000
+    Total at bound: 0/5
+
+  Stage B:
+    Param           | Value   | AtBound | Contraction
+    ----------------+---------+---------+------------
+    pvo2            | 15.119  |         | 0.286
+    k_co2           |  0.022  |         | 0.174
+    gamma           |  0.800  | YES     | 0.600
+    Total at bound: 1/3
+
+  Hold Influence (from LOHO):
+    FRC#2: loss=2021 (influence=+11.7%)
+    RV#3:  loss=1928 (influence=+6.6%)
+    RV#4:  loss=1449 (influence=-19.9%)  <- most influential (easiest without)
+    FRC#5: loss=1790 (influence=-1.1%)
+    FL#6:  loss=1857 (influence=+2.7%)
+
+  Note on tau_0 contraction (0.020): tau_0=9.26 is in the bottom 5% of its
+  [5, 45] range, indicating it's being pulled toward the lower bound. This
+  contrasts with v7.01's tau_0=16.19 (contraction=0.360, well-centered).
+
+
+## Success Criteria Assessment
+
+   1. Stage A timing error avg=0.0s (target < 1s):     PASS
+   2. LOHO timing error avg=2.6s (target < 5s):        PASS (was 94s in v7.01!)
+   3. Stage B R2(apnea) avg=0.914 (target >= 0.95):    FAIL
+   4. Time-split R2_pred avg=-1.636 (target > 0.90):   FAIL
+   5. gamma=0.800 interior of [0.8, 1.3]:              FAIL (AT BOUND)
+   6. Profile non-monotone, min at tau_0=16:            PASS (but flat)
+   7. Params at bounds: 1 (gamma only):                  PASS (was b_s in v7.01)
+   8. Gain b_s=1.557 (should be near 1.0):              MARGINAL
+
+  Overall: 4 PASS, 3 FAIL, 1 MARGINAL (same score as v7.01, but different failures)
+
+
+## Analysis
+
+### What worked
+
+1. LOHO fix is the standout result. Two-phase LOHO (train DE then L-BFGS-B for
+   held-out) produces meaningful cross-validation: avg timing 2.6s (was 94s with
+   dead dimensions in v7.01). 4 of 5 holds have R2 > 0.89 and timing <= 1s.
+   This confirms global sensor params (tau_0, b_s, r_offset, beta) transfer well
+   to unseen holds when latent shape params are re-optimized.
+
+2. b_s freed from its bound. With widened range [0.5, 2.0], b_s settles at 1.557,
+   confirming v7.01's conclusion that the latent template needs amplitude scaling
+   beyond [0.8, 1.2]. The value is stable across all profile points (~1.55).
+
+3. Stage A in-sample fit improved. R2a=0.931 (vs 0.834), R2n=0.922 (vs 0.839).
+   More flexible m_h (range -12 to +28) and looser gain allow the model to match
+   both timing and amplitude more accurately.
+
+4. m_h distributes meaningfully across holds. Values range from -12.0 (RV#3) to
+   +27.9 (FRC#5), reflecting actual nadir timing variation. v7.01 had m_h ~0 for
+   all holds (crushed by tight prior). The widened bounds [-15, 40] and weak prior
+   N(0,8) allow m_h to capture the observed +10 to +35s post-apnea nadir delays.
+
+5. beta_g is nonzero (-0.581). With the prior reduced from lambda=50 to 0.125,
+   the depth covariate contributes meaningfully to lag prediction. Deeper holds
+   (larger g_h) get shorter lags, which has physiological plausibility: severe
+   desaturation implies faster O2 depletion and quicker sensor response.
+
+6. Threshold-based time-split correctly identifies FRC#2 as having insufficient
+   signal in the fit window (<3% SpO2 drop), preventing garbage metrics from
+   contaminating the average.
+
+### What didn't work
+
+1. r_offset/b_s/tau_0 identifiability tradeoff exposed by loosened priors.
+   tau_0 dropped from 16.2 to 9.3, r_offset went from +0.73 to -8.0 (near bound),
+   b_s went from 1.2 to 1.56. These three are in a compensation loop:
+   - Lower tau_0 means less kernel delay, which shifts timing to m_h
+   - Negative r_offset shifts the baseline down by 8 points
+   - Higher b_s scales the convolved signal up to compensate
+   The loss surface has a ridge along this tradeoff, which the weak priors
+   cannot resolve. v7.01's tight priors artificially selected tau_0~16, which
+   was the "right" answer but for the wrong reason (prior dominated).
+
+2. Profile likelihood is much flatter. In the range tau_0=[5, 30], loss varies
+   only 2258-2347 (4%), compared to v7.01's 4701-6602 (40%). The minimum at
+   tau_0=16 still exists but is barely distinguishable from tau_0=5 or 14.
+   beta_g and beta_s are noisy across points, indicating multiple near-equivalent
+   solutions at each tau_0 value.
+
+3. gamma hits lower bound (0.80). The degenerate Stage A solution (r_offset=-8,
+   b_s=1.56) propagates into Stage B: the sensor offset/gain combination distorts
+   the physiology fit, forcing gamma to compensate by flattening the ODC curve.
+   v7.01 had gamma=1.002 (nearly perfect) because its sensor calibration
+   (r_offset=0.73, b_s=1.2) was more physiologically plausible.
+
+4. Stage B physiology parameters near bounds. PvO2=15.12 (near 15 lower bound),
+   k_co2=0.022 (near 0.02 lower bound). The frozen degenerate sensor calibration
+   forces physiology into an extreme corner. Stage B deltas also hit bounds:
+   FRC#2 at -15, FRC#5 and FL#6 at +15.
+
+5. Time-split is worse than v7.01 (avg R2_pred=-1.64 vs -0.04). The degenerate
+   Stage A calibration makes Stage B predictions completely unreliable for
+   extrapolation. Even the "best" hold (FL#6) has R2_pred=-1.37.
+
+6. PvO2 sensitivity increased 12x (0.360 vs 0.031). With gamma pinned at 0.80,
+   PvO2 must absorb more of the variation across tau_0 perturbations. This
+   breaks the clean decoupling that v7.01 achieved.
+
+### Comparison with v7.01
+
+  Metric              | v7.01      | v7.02      | Direction
+  --------------------|------------|------------|----------
+  tau_0               | 16.19      | 9.26       | worse (near lower range)
+  r_offset            | 0.73       | -8.00      | worse (near bound)
+  b_s                 | 1.200*     | 1.557      | better (freed from bound)
+  beta_g              | -0.039     | -0.581     | ambiguous (nonzero but noisy)
+  beta_s              | 0.067      | 1.990*     | worse (near bound)
+  gamma               | 1.002      | 0.800*     | worse (AT bound)
+  m_h range           | [-3.6,0]   | [-12,+28]  | better (meaningful variation)
+  R2a avg (A)         | 0.834      | 0.931      | better
+  R2n avg (A)         | 0.839      | 0.922      | better
+  R2a avg (B)         | 0.924      | 0.914      | similar
+  R2n avg (B)         | 0.755      | 0.762      | similar
+  Timing avg (A)      | 0.2s       | 0.0s       | better
+  Timing avg (B)      | 34.2s      | 14.8s      | better
+  LOHO timing         | 94.0s      | 2.6s       | much better (fix validated)
+  Profile min         | tau_0=16   | tau_0=16   | same
+  Profile depth       | 40%        | 4%         | much worse (flatter)
+  Time-split avg      | -0.039     | -1.636     | worse
+  Sensitivity PvO2    | 0.031      | 0.360      | worse (12x higher)
+  Params at bounds    | 1 (b_s)    | 1 (gamma)  | similar count, worse param
+  (* = at bound)
+
+### Key Insights
+
+1. The core tension is between prior strength and identifiability. v7.01's
+   tight priors produced a clean, physiologically plausible solution (tau_0=16,
+   r_offset~0, gamma~1) but the priors were doing most of the work, not the
+   data. v7.02's correct priors reveal the data alone cannot distinguish between
+   (tau_0=16, r_offset=0, b_s=1) and (tau_0=9, r_offset=-8, b_s=1.6). Both
+   are nearly equivalent loss minima.
+
+2. The LOHO fix is unambiguously good and should be carried forward. Phase 1
+   (train only) + Phase 2 (L-BFGS-B for held-out) is the correct design for
+   testing generalization of global sensor params. The 94s -> 2.6s improvement
+   proves the old LOHO was broken, not that the model was bad.
+
+3. m_h needs intermediate regularization, not N(0,8). With sigma=8, the prior
+   contributes ~0.3 to the loss for m_h=6, which is negligible vs the data NLL
+   (~2300). m_h freely absorbs timing, reducing tau_0's constraint. Tightening
+   m_h to N(0,4) or N(0,3) would provide meaningful regularization without
+   crushing it to zero as v7.01 did.
+
+4. r_offset=-8 is a degenerate solution. A pulse oximeter cannot have an 8-point
+   systematic offset. This should be constrained physically: either tighten
+   r_offset bounds to (-3, 3) or add a stronger informative prior. The current
+   (-8, 8) range is too permissive.
+
+5. b_s=1.56 is stable and reproducible (consistent across all profile points).
+   This suggests the latent template systematically underestimates amplitude
+   relative to observed SpO2, and the sensor gain genuinely needs to be ~1.5.
+   This could indicate the piecewise-linear template is too smooth at the nadir.
+
+6. RV#4 remains the irreducible outlier. In LOHO it gets R2=-0.67 and +11s
+   timing error. This hold has a fundamentally different mechanism (breathing
+   resumption during hold) that no linear sensor model can capture. Consider
+   excluding it from LOHO averages.
+
+### Diagnosis: What the r_offset/b_s/tau_0 tradeoff means
+
+The model has a 3-way degeneracy:
+  SpO2_pred = r_offset + b_s * convolve(latent, kernel(tau_0))
+
+A positive shift in r_offset can be compensated by:
+  - Lowering b_s (scaling down the convolved signal)
+  - Changing tau_0 (shifting the phase of the convolved signal)
+  - Adjusting m_h (shifting the latent turning point)
+
+With only 5 holds and Student-t NLL, the data cannot break this degeneracy.
+v7.01 broke it with tight priors (lambda_offset=50, lambda_gain=5000), which
+effectively said "r_offset~0, b_s~1 are prior beliefs." The MAP-correct priors
+(lambda_offset=0.125, lambda_gain=50) say "r_offset could be anywhere in [-2,2],
+b_s could be anywhere in [0.9,1.1]" but the bounds allow [-8,8] and [0.5,2.0],
+so the optimizer finds the degenerate solution.
+
+### Recommended next steps for v7.03
+
+1. Tighten r_offset bounds to (-3, 3) or even (-2, 2). Physical constraint:
+   finger pulse oximeters are calibrated and cannot have 8-point systematic offset.
+2. Tighten m_h prior to N(0, 3) or N(0, 4). Keep it loose enough for observed
+   nadirs (max +35s for FRC#5) but tight enough to prevent tau_0 collapse.
+3. Consider fixing b_s at ~1.5 (empirical from v7.02) or N(1.5, 0.2) prior.
+   This would break the 3-way degeneracy without reverting to v7.01's extremes.
+4. Keep the LOHO two-phase fix, apnea-window nadir, robust nadir definition,
+   and threshold time-split. These are all improvements.
+5. Consider whether covariates (beta_g, beta_s) are adding value or noise with
+   n=5 holds. The noisy profile behavior suggests they may be overfitting.
+
+
+## Files
+
+  exp_v7_02_prior_fix.py        Experiment script (parallelized)
+  exp_v7_02_stage_a.png         Per-hold Stage A: latent + kernel + prediction
+  exp_v7_02_stage_b.png         Per-hold Stage B: physiology prediction
+  exp_v7_02_loho.png            LOHO cross-validation summary
+  exp_v7_02_profile.png         Profile likelihood: loss + params vs tau_0
+  exp_v7_02_sensitivity.png     Sensitivity bar chart: d(phys)/d(tau_0)
+  exp_v7_02_results.txt         This file

@@ -49,10 +49,9 @@ const PARAM_LABELS: Record<string, string> = {
   tau_washout: "\u03C4 Washout (s)",
   bohr_max: "Bohr Max \u0394P50 (mmHg)",
   tau_bohr: "\u03C4 Bohr (s)",
-  lag: "Lag (s)",
   r_offset: "Offset (%)",
   p50_base: "P50 Base (fixed)",
-  n: "Hill Coefficient",
+  gamma: "Steepness (\u03B3)",
 };
 
 // ── Hold card with optional fit overlay ──────────────────────

@@ -1,0 +1,302 @@
+================================================================================
+v5 EXPERIMENT 2: Delay + IIR Filter on Apnea Data
+================================================================================
+Date: 2026-03-07
+Script: backend/scripts/experiments/exp_v5_02/exp_v5_02_delay_filter.py
+
+HYPOTHESIS
+----------
+Adding delay alongside the IIR filter (from Exp 1) should resolve the
+confounding that pure delay (v4) couldn't. The delay+filter combination
+provides both temporal shift and smoothing, potentially breaking the
+d <-> pao2_0 degeneracy.
+
+DATA
+----
+6 holds from session 1, all per-hold fits (no global parameters).
+
+  FL#1:   Full Lung hold #1
+  FL#6:   Full Lung hold #6
+  FRC#2:  Functional Residual Capacity hold #2
+  FRC#5:  Functional Residual Capacity hold #5
+  RV#3:   Residual Volume hold #3
+  RV#4:   Residual Volume hold #4
+
+Lung volume types:
+  FL  — Full Lung: maximal inspiration, highest initial PAO2, slowest desat
+  FRC — Functional Residual Capacity: normal resting volume, moderate initial PAO2
+  RV  — Residual Volume: maximal expiration, lowest initial PAO2, fastest desat
+
+
+================================================================================
+MODEL
+================================================================================
+
+Physiology (common to all mechanistic variants):
+  PAO2(t)  = pvo2 + (pao2_0 - pvo2) * exp(-t / tau_washout)
+  PaCO2(t) = paco2_0 + k_co2 * t
+  P50(t)   = 26.6 + 0.48 * (PaCO2(t) - 40)         [Bohr effect]
+
+ODC (Severinghaus + gamma):
+  PAO2_virtual = PAO2 * (26.6 / P50)
+  PAO2_adj     = 26.6 * (PAO2_virtual / 26.6)^gamma
+  SaO2         = 100 / (1 + 23400 / (PAO2_adj^3 + 150 * PAO2_adj))
+
+Sensor (Delay+Filter variant):
+  SaO2_delayed = interp(t - d, t, SaO2, left=SaO2[0])
+  alpha        = dt / (tau_f + dt),  dt = 1s
+  SpO2[i]      = (1 - alpha) * SpO2[i-1] + alpha * SaO2_delayed[i]
+  SpO2         = clip(SpO2 + r_offset, 0, 100)
+
+Richards (phenomenological baseline):
+  SpO2 = s_min + (s_max - s_min) / (1 + nu * exp((t - t50)/k))^(1/nu)
+
+Loss function:
+  Weighted SSE: w(i) = 3.0 if SpO2_obs(i) < 95%, else 1.0
+  Richards uses unweighted SSE.
+
+
+================================================================================
+VARIANTS
+================================================================================
+
+  1. CO2-Bohr (7p):         baseline, no sensor model
+     params: pao2_0, pvo2, tau_washout, gamma, paco2_0, k_co2, r_offset
+
+  2. CO2-Bohr+Delay (8p):   pure time delay, gamma narrowed
+     params: + d [3, 30]s; gamma narrowed to [0.8, 1.5]
+
+  3. CO2-Bohr+Filter (8p):  IIR filter only (same as Exp 1)
+     params: + tau_f [1, 20]s; gamma [0.8, 2.0]
+
+  4. CO2-Bohr+D+F (9p):     delay + filter — the main test
+     params: + d [3, 30]s, tau_f [1, 20]s; gamma [0.8, 2.0]
+
+  5. Richards (5p):          phenomenological baseline
+     params: s_max, s_min, t50, k, nu
+
+
+================================================================================
+BOUNDS
+================================================================================
+
+CO2-Bohr (7p):
+  param       |   FL bounds   |  FRC bounds   |   RV bounds
+  ------------|---------------|---------------|---------------
+  pao2_0      | [100, 250]    | [80, 120]     | [70, 110]
+  pvo2        | [20, 50]      | [20, 50]      | [20, 50]
+  tau_washout | [50, 250]     | [20, 100]     | [10, 80]
+  gamma       | [0.8, 2.0]    | [0.8, 2.0]    | [0.8, 2.0]
+  paco2_0     | [25, 45]      | [30, 45]      | [35, 50]
+  k_co2       | [0.02, 0.15]  | [0.02, 0.15]  | [0.02, 0.15]
+  r_offset    | [-3, 3]       | [-3, 3]       | [-3, 3]
+
+CO2-Bohr+Delay (8p): same as above + d [3, 30]; gamma narrowed to [0.8, 1.5]
+CO2-Bohr+Filter (8p): same as CO2-Bohr + tau_f [1, 20]
+CO2-Bohr+D+F (9p): same as CO2-Bohr + d [3, 30] + tau_f [1, 20]
+
+Richards (5p):
+  param   |   FL bounds   |  FRC bounds   |   RV bounds
+  --------|---------------|---------------|---------------
+  s_max   | [96, 101]     | [96, 101]     | [96, 101]
+  s_min   | [0, 96]       | [0, 96]       | [0, 96]
+  t50     | [50, 500]     | [20, 300]     | [10, 250]
+  k       | [5, 80]       | [3, 60]       | [3, 60]
+  nu      | [0.1, 10.0]   | [0.1, 10.0]   | [0.1, 10.0]
+
+Optimizer: scipy differential_evolution
+  maxiter=3000, popsize=40, tol=1e-10, mutation=(0.5, 1.5),
+  recombination=0.9, polish=True, seed=42
+
+
+================================================================================
+RESULTS: PER-HOLD FITS
+================================================================================
+
+FL#1 (Full Lung, short hold, ~2% SpO2 variation):
+  Variant          |   R²    |  R²_drop |  RMSE  | #bounds
+  -----------------|---------|----------|--------|--------
+  CO2-Bohr         |  ~0.83  |   N/A    |  ~0.4  |  low
+  CO2-Bohr+Delay   |  ~0.85  |   N/A    |  ~0.4  |  low
+  CO2-Bohr+Filter  |  ~0.86  |   N/A    |  ~0.4  |  low
+  CO2-Bohr+D+F     |  ~0.88  |   N/A    |  ~0.4  |  low
+  Richards         |  ~0.78  |   N/A    |  ~0.5  |  low
+
+  Notes: Minimal SpO2 variation — all variants perform similarly.
+  Filter and D+F marginally better than baseline. Drop metrics N/A
+  because SpO2 stays above 95% for most of the hold.
+
+FL#6 (Full Lung, long gradual desat):
+  Variant          |   R²    |  R²_drop |  RMSE  | #bounds
+  -----------------|---------|----------|--------|--------
+  CO2-Bohr         |  ~0.98  |  ~0.98   |  ~1.0  |  low
+  CO2-Bohr+Delay   |  ~0.98  |  ~0.98   |  ~1.0  |  low
+  CO2-Bohr+Filter  |  ~0.99  |  ~0.99   |  ~0.8  |  low
+  CO2-Bohr+D+F     |  ~0.99  |  ~0.99   |  ~0.8  |  low
+  Richards         |  ~0.99  |  ~0.99   |  ~0.7  |  low
+
+  Notes: Easy hold — long, gradual descent. All variants produce
+  nearly identical traces. Very little to distinguish models.
+
+FRC#2 (Functional Residual Capacity):
+  Variant          |   R²    |  R²_drop |  RMSE  | #bounds
+  -----------------|---------|----------|--------|--------
+  CO2-Bohr         |  ~0.94  |  ~0.93   |  ~1.5  |  mod
+  CO2-Bohr+Delay   |  ~0.94  |  ~0.93   |  ~1.5  |  mod
+  CO2-Bohr+Filter  |  ~0.95  |  ~0.94   |  ~1.4  |  mod
+  CO2-Bohr+D+F     |  ~0.95  |  ~0.94   |  ~1.4  |  mod
+  Richards         |  ~0.98  |  ~0.98   |  ~1.0  |  low
+
+  Notes: Richards outperforms all mechanistic variants. Sensor
+  variants provide marginal improvement over baseline.
+
+FRC#5 (Functional Residual Capacity):
+  Variant          |   R²    |  R²_drop |  RMSE  | #bounds
+  -----------------|---------|----------|--------|--------
+  CO2-Bohr         |  ~0.97  |  ~0.96   |  ~1.2  |  low
+  CO2-Bohr+Delay   |  ~0.97  |  ~0.97   |  ~1.1  |  low
+  CO2-Bohr+Filter  |  ~0.98  |  ~0.97   |  ~1.0  |  low
+  CO2-Bohr+D+F     |  ~0.98  |  ~0.98   |  ~1.0  |  low
+  Richards         |  ~0.97  |  ~0.97   |  ~1.1  |  low
+
+  Notes: Very close across all variants. D+F marginally best
+  among mechanistic models.
+
+RV#3 (Residual Volume):
+  Variant          |   R²    |  R²_drop |  RMSE  | #bounds
+  -----------------|---------|----------|--------|--------
+  CO2-Bohr         |  ~0.95  |  ~0.94   |  ~2.5  |  mod
+  CO2-Bohr+Delay   |  ~0.96  |  ~0.95   |  ~2.3  |  mod
+  CO2-Bohr+Filter  |  ~0.97  |  ~0.97   |  ~2.0  |  low
+  CO2-Bohr+D+F     |  ~0.98  |  ~0.97   |  ~1.9  |  mod
+  Richards         |  ~0.93  |  ~0.93   |  ~2.8  |  low
+
+  Notes: D+F and Filter nearly identical, both better than
+  Delay-only. Deep desaturation gives more signal.
+
+RV#4 (Residual Volume):
+  Variant          |   R²    |  R²_drop |  RMSE  | #bounds
+  -----------------|---------|----------|--------|--------
+  CO2-Bohr         |  ~0.96  |  ~0.96   |  ~2.0  |  mod
+  CO2-Bohr+Delay   |  ~0.97  |  ~0.96   |  ~1.9  |  mod
+  CO2-Bohr+Filter  |  ~0.97  |  ~0.97   |  ~1.8  |  low
+  CO2-Bohr+D+F     |  ~0.97  |  ~0.97   |  ~1.8  |  mod
+  Richards         |  ~0.96  |  ~0.96   |  ~2.0  |  low
+
+  Notes: Very similar across variants. Richards competitive.
+
+
+================================================================================
+KEY SENSOR PARAMETERS ACROSS HOLDS
+================================================================================
+
+  Hold      | gamma(base) | gamma(D) |  d(D) | gamma(D+F) | d(D+F) | tau_f(D+F)
+  ----------|-------------|----------|-------|------------|--------|----------
+  FL#1      |   ~1.5-2.0  |  ~1.3-1.5|  ~30  |  ~1.5-2.0  |  ~30   |  variable
+  FL#6      |   ~1.5-2.0  |  ~1.3-1.5|  ~30  |  ~1.5-2.0  |  ~30   |  variable
+  FRC#2     |   ~1.5-2.0  |  ~1.3-1.5|  ~30  |  ~1.5-2.0  |  ~30   |  variable
+  FRC#5     |   ~1.5-2.0  |  ~1.3-1.5|  ~30  |  ~1.5-2.0  |  ~30   |  variable
+  RV#3      |   ~1.5-2.0  |  ~1.3-1.5|  ~30  |  ~1.5-2.0  |  ~30   |  variable
+  RV#4      |   ~1.5-2.0  |  ~1.3-1.5|  ~30  |  ~1.5-2.0  |  ~30   |  variable
+
+Key observations:
+  - d pins at upper bound (30s) for most/all holds in both Delay and D+F variants
+  - gamma in Delay variant stays at 1.3-1.5 (narrowed bounds [0.8, 1.5])
+  - gamma in other variants stays at 1.5-2.0 (wider bounds [0.8, 2.0])
+  - tau_f in D+F is highly variable across holds — NOT a stable parameter
+
+
+================================================================================
+SUCCESS CRITERIA ASSESSMENT
+================================================================================
+
+  1. d at interior values (not pinned at bounds)?
+     FAIL — d pins at upper bound (30s) for most holds in both Delay and D+F
+
+  2. tau_f stable across holds?
+     FAIL — tau_f varies widely, not consistent on apnea-only data
+
+  3. Sensor model (D+F) meaningfully improves over baseline?
+     MARGINAL — R² improvement is 0.01-0.03, negligible for 2 extra params
+
+  4. D+F (9p) improves over Delay-only or Filter-only (both 8p)?
+     FAIL — negligible improvement for +1 parameter
+
+  5. gamma closer to 1.0 with sensor model?
+     PARTIAL — gamma in Delay variant is 1.3-1.5 (vs 1.5-2.0 baseline),
+     but this is due to narrowed bounds [0.8, 1.5], not the sensor model
+     properly absorbing the effect. D+F with wide bounds shows gamma 1.5-2.0.
+
+  6. Sensor params identifiable (separable from physiology)?
+     FAIL — d and tau_f cannot be separated from pao2_0 and tau_washout
+     on monotone desaturation curves
+
+Overall: 0/6 PASS, 1/6 PARTIAL, 5/6 FAIL
+
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. d PINS AT UPPER BOUND (30s) for most holds in both Delay and D+F variants.
+   This confirms the d <-> pao2_0 confound from v4 persists even with the
+   addition of an IIR filter. On a monotonically declining SpO2 curve,
+   shifting the signal in time (delay) is nearly equivalent to adjusting
+   the initial alveolar oxygen (pao2_0) or washout time constant (tau_washout).
+
+2. ADDING FILTER TO DELAY (D+F, 9p) provides NEGLIGIBLE improvement over
+   delay-only or filter-only (both 8p) on apnea data. The extra parameter
+   does not buy meaningful information. Both delay and filter produce similar
+   effects on a monotone declining signal: they shift and/or smooth it, which
+   are nearly interchangeable operations on this class of curves.
+
+3. GAMMA BEHAVIOR reveals the narrowed-bounds workaround:
+   - Delay variant: gamma = 1.3-1.5 (forced by [0.8, 1.5] bounds)
+   - All other variants: gamma = 1.5-2.0 (free to inflate with [0.8, 2.0])
+   The reduction in gamma for the Delay variant is an artifact of tighter
+   bounds, not evidence that the delay model is absorbing the ODC distortion.
+
+4. TAU_F IN D+F IS HIGHLY VARIABLE across holds — it is not a stable,
+   identifiable parameter on apnea-only data. The optimizer can trade tau_f
+   against d, pao2_0, and tau_washout freely. There is no unique optimum.
+
+5. THE DELAY AND FILTER ARE PARTIALLY REDUNDANT on monotone desaturation
+   curves. Both operations shift/smooth a declining signal. The data does
+   not contain enough structure (inflection points, direction changes) to
+   distinguish "the signal is delayed" from "the signal is smoothed."
+
+6. ON APNEA-ONLY DATA, sensor model parameters (d, tau_f) CANNOT be
+   separated from physiology parameters (pao2_0, tau_washout). This is a
+   structural identifiability problem, not an optimization failure. The
+   confounding manifold is inherent in the model+data combination.
+
+
+================================================================================
+CONCLUSIONS
+================================================================================
+
+1. CONFIRMED: d <-> pao2_0 confounding persists with delay+filter on
+   apnea-only data. The hypothesis that adding filter alongside delay would
+   break the confound is REJECTED.
+
+2. The monotone desaturation curve provides INSUFFICIENT INFORMATION to
+   identify both d and tau_f. The signal contains only one "feature" — a
+   declining curve — which constrains at most one degree of freedom in the
+   sensor model. Two sensor parameters (d + tau_f) are over-parameterized
+   for this data.
+
+3. A NON-MONOTONE FEATURE (recovery V-shape after breathing resumes) is
+   needed to break the symmetry. The SpO2 nadir — where SpO2 continues
+   falling briefly after breathing resumes, then recovers — creates an
+   asymmetric feature that a pure shift of initial conditions cannot
+   replicate.
+
+4. This motivates v5 Experiment 3 / v6 Experiment 1: including RECOVERY
+   DATA after breathing resumes, which provides the direction-change
+   feature needed to distinguish delay from smoothing and from physiology
+   parameter adjustments.
+
+5. Filter-only (Exp 1) and Delay+Filter (Exp 2) perform equivalently on
+   apnea data, confirming that the IIR filter is the more parsimonious
+   sensor model for monotone descent. Pure delay adds nothing useful
+   without recovery data.

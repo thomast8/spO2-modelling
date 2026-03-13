@@ -1,0 +1,249 @@
+============================================================================================================================================
+v6.06: Smooth Kernel + Structural Shifts + Sensor-Only Training
+============================================================================================================================================
+
+Loading holds with recovery data...
+  FL#1 [EXCLUDED]: 178 apnea + 5 recovery pts (t_end=179s, recovery SpO2 97-97%)
+  FRC#2: 132 apnea + 48 recovery pts (t_end=134s, recovery SpO2 78-94%)
+  RV#3: 126 apnea + 49 recovery pts (t_end=129s, recovery SpO2 52-96%)
+  RV#4: 174 apnea + 56 recovery pts (t_end=173s, recovery SpO2 59-91%)
+  FRC#5: 185 apnea + 60 recovery pts (t_end=187s, recovery SpO2 41-96%)
+  FL#6: 366 apnea + 38 recovery pts (t_end=372s, recovery SpO2 52-89%)
+
+Fitting on 5 holds, excluding 1 hold(s)
+
+============================================================================================================================================
+OBSERVED NADIR TIMING
+============================================================================================================================================
+  FL#1 [EXCLUDED]: nadir at t=173s (SpO2=97%, apnea, delay_from_end=-6s)
+  FRC#2: nadir at t=151s (SpO2=78%, recovery, delay_from_end=+17s)
+  RV#3: nadir at t=139s (SpO2=52%, recovery, delay_from_end=+10s)
+  RV#4: nadir at t=168s (SpO2=41%, apnea, delay_from_end=-5s)
+  FRC#5: nadir at t=222s (SpO2=41%, recovery, delay_from_end=+35s)
+  FL#6: nadir at t=395s (SpO2=52%, recovery, delay_from_end=+23s)
+
+  Depth severity g_h (for structural shifts):
+    FRC#2: g_h = 1.700 (min SpO2 = 78%)
+    RV#3: g_h = 4.300 (min SpO2 = 52%)
+    RV#4: g_h = 5.400 (min SpO2 = 41%)
+    FRC#5: g_h = 5.400 (min SpO2 = 41%)
+    FL#6: g_h = 4.300 (min SpO2 = 52%)
+
+Changes from v6.05:
+  1. Replace cascaded IIR with bin-integrated discrete gamma CDF (smooth, no cap)
+  2. Structural shifts: beta*g(severity) + delta_h with zero-sum (Exp B)
+  3. Sensor-only identification with latent monotone splines (Exp C)
+  4. Frozen sensor + physiology (Exp D)
+  5. Wider bounds: mean_lag (5,45), cv (0.10,1.2)
+
+============================================================================================================================================
+EXP A: Smooth Discrete Gamma Kernel (17 params)
+============================================================================================================================================
+
+  Exp A: 17 params (7 shared + 2x5 per-hold)
+  Smooth gamma kernel: mean_lag in (5, 45), cv in (0.10, 1.2)
+  Converged: True, fun=1240368.31, nfev=1446738
+
+  Exp A:
+            pvo2 =  31.2672  [ 15.00,  50.00]
+           k_co2 =   0.1071  [  0.02,   0.25]
+        r_offset =  -0.8661  [ -8.00,   8.00]
+       tau_reoxy =  30.0000  [  5.00,  30.00] ** AT BOUND **
+        mean_lag =  22.5253  [  5.00,  45.00]
+              cv =   0.2125  [  0.10,   1.20]
+           gamma =   1.2001  [  0.80,   3.00]
+
+    Kernel (smooth): k=22.14, mean=22.5s, std=4.8s (no cap)
+
+  Exp A — Per-hold ICs (Aa=0 fixed):
+    FRC#2: tau_w=100.0, paco2_0=39.7, PaO2_0=99.6  [tau_washout=hi]
+    RV#3: tau_w=45.6, paco2_0=40.0, PaO2_0=99.1
+    RV#4: tau_w=49.4, paco2_0=38.8, PaO2_0=100.7
+    FRC#5: tau_w=93.9, paco2_0=40.6, PaO2_0=98.4
+    FL#6: tau_w=250.0, paco2_0=37.9, PaO2_0=101.8  [tau_washout=hi]
+
+============================================================================================================================================
+EXP B: Structural Shifts — beta*g(severity) + delta_h (23 params)
+============================================================================================================================================
+
+  Exp B: 23 params (7 shared + 1 beta + 5 delta + 2x5 per-hold ICs)
+  Structural shift: eff_lag = mean_lag + beta*g_h + delta_h
+  Severity g_h: ['1.70', '4.30', '5.40', '5.40', '4.30']
+  lambda_shrink=300.0, lambda_zerosum=500.0, lambda_beta=200.0
+  Converged: False, fun=551832.69, nfev=2071194
+
+  Exp B (shared):
+            pvo2 =  21.5652  [ 15.00,  50.00]
+           k_co2 =   0.0667  [  0.02,   0.25]
+        r_offset =  -2.7752  [ -8.00,   8.00]
+       tau_reoxy =  30.0000  [  5.00,  30.00] ** AT BOUND **
+        mean_lag =  15.9602  [  5.00,  45.00]
+              cv =   0.1139  [  0.10,   1.20]
+           gamma =   1.4291  [  0.80,   3.00]
+
+    Kernel (smooth): k=77.15, mean=16.0s, std=1.8s (no cap)
+
+    beta = 1.3894  [-2.00, 2.00]
+
+  Exp B — Per-hold ICs (Aa=0 fixed):
+    FRC#2: tau_w=100.0, paco2_0=39.3, PaO2_0=100.1  [tau_washout=hi]
+    RV#3: tau_w=63.9, paco2_0=40.2, PaO2_0=99.0
+    RV#4: tau_w=80.0, paco2_0=39.4, PaO2_0=99.9  [tau_washout=hi]
+    FRC#5: tau_w=84.7, paco2_0=40.1, PaO2_0=99.0
+    FL#6: tau_w=250.0, paco2_0=38.8, PaO2_0=100.6  [tau_washout=hi]
+
+  Exp B — Structural shift breakdown (base mean_lag=15.96, beta=1.389):
+    FRC#2: beta*g= +2.36, delta= +1.25, total_shift= +3.61, eff_lag= 19.57
+    RV#3: beta*g= +5.97, delta= -4.22, total_shift= +1.75, eff_lag= 17.71
+    RV#4: beta*g= +7.50, delta=-15.00, total_shift= -7.50, eff_lag=  8.46 *BOUND*
+    FRC#5: beta*g= +7.50, delta=+13.97, total_shift=+21.47, eff_lag= 37.43
+    FL#6: beta*g= +5.97, delta= +5.01, total_shift=+10.98, eff_lag= 26.94
+
+============================================================================================================================================
+EXP C: Sensor-Only with Latent Splines (49 params)
+============================================================================================================================================
+
+  Exp C: 49 params (4 kernel + 5 delta + 8x5 spline)
+  Sensor-only: latent PCHIP spline -> gamma kernel -> SpO2
+  No physiology model — kernel must self-identify from data shape
+  Converged: True, fun=143274.67, nfev=7130630
+
+  Exp C kernel params:
+        mean_lag =  15.7734  [  5.00,  45.00]
+              cv =   0.1000  [  0.10,   1.20] ** AT BOUND **
+        r_offset =   1.6633  [ -8.00,   8.00]
+            beta =   2.0000  [ -2.00,   2.00] ** AT BOUND **
+
+    Kernel (smooth): k=100.00, mean=15.8s, std=1.6s
+
+  Exp C — Per-hold shifts:
+    FRC#2: beta*g= +3.40, delta= -0.13, eff_lag= 19.05
+    RV#3: beta*g= +8.60, delta= -0.12, eff_lag= 24.26
+    RV#4: beta*g=+10.80, delta= +0.07, eff_lag= 26.65
+    FRC#5: beta*g=+10.80, delta= +0.51, eff_lag= 27.08
+    FL#6: beta*g= +8.60, delta= -0.14, eff_lag= 24.23
+
+  Exp C — Latent spline params:
+    FRC#2: x0=100.0, dec=[3.1,4.1,5.7,5.4], inc=[0.0,0.4,0.4]
+      -> knot values: [100.0, 96.9, 92.8, 87.1, 81.8, 81.8, 82.2, 82.6]
+    RV#3: x0=100.0, dec=[6.9,10.4,14.6,10.6], inc=[0.0,1.4,1.1]
+      -> knot values: [100.0, 93.1, 82.7, 68.1, 57.6, 57.6, 59.0, 60.1]
+    RV#4: x0=100.0, dec=[10.6,13.6,15.3,4.0], inc=[0.0,0.1,0.0]
+      -> knot values: [100.0, 89.4, 75.9, 60.6, 56.5, 56.5, 56.6, 56.7]
+    FRC#5: x0=100.0, dec=[5.4,10.6,18.9,17.8], inc=[0.0,0.0,0.0]
+      -> knot values: [100.0, 94.6, 84.0, 65.1, 47.3, 47.3, 47.3, 47.3]
+    FL#6: x0=100.0, dec=[2.8,7.4,16.0,15.3], inc=[0.0,0.3,0.2]
+      -> knot values: [100.0, 97.2, 89.8, 73.7, 58.4, 58.4, 58.7, 58.9]
+
+============================================================================================================================================
+EXP D: Frozen Sensor + Physiology (19 params)
+============================================================================================================================================
+
+  Exp D: 19 params (4 physiology + 5 delta + 2x5 per-hold ICs)
+  Frozen sensor: mean_lag=15.77, cv=0.100, r_offset=1.66, beta=2.000
+  Converged: False, fun=599616.76, nfev=1710790
+
+  Exp D physiology params (sensor frozen from Exp C):
+            pvo2 =  19.4690  [ 15.00,  50.00]
+           k_co2 =   0.0601  [  0.02,   0.25]
+       tau_reoxy =  30.0000  [  5.00,  30.00] ** AT BOUND **
+           gamma =   1.1321  [  0.80,   3.00]
+
+  Exp D — Per-hold shifts:
+    FRC#2: beta*g= +3.40, delta= +2.35, eff_lag= 21.52
+    RV#3: beta*g= +8.60, delta= -5.86, eff_lag= 18.51
+    RV#4: beta*g=+10.80, delta=-14.76, eff_lag= 11.81
+    FRC#5: beta*g=+10.80, delta=+12.41, eff_lag= 38.98
+    FL#6: beta*g= +8.60, delta= +4.32, eff_lag= 28.69
+
+  Exp D — Per-hold ICs (Aa=0 fixed):
+    FRC#2: tau_w=100.0, paco2_0=39.1, PaO2_0=100.3  [tau_washout=hi]
+    RV#3: tau_w=65.0, paco2_0=40.2, PaO2_0=99.0
+    RV#4: tau_w=80.0, paco2_0=39.5, PaO2_0=99.8  [tau_washout=hi]
+    FRC#5: tau_w=84.7, paco2_0=40.0, PaO2_0=99.2
+    FL#6: tau_w=250.0, paco2_0=38.9, PaO2_0=100.6  [tau_washout=hi]
+
+============================================================================================================================================
+PER-HOLD COMPARISON
+============================================================================================================================================
+  Hold            |    R2a    R2n NadirErr |    R2a    R2n NadirErr |    R2a    R2n NadirErr |    R2a    R2n NadirErr
+                           A:smooth_kernel             B:structural            C:sensor-only          D:frozen_sensor
+  ----------------+------------------------+------------------------+------------------------+-----------------------
+  FL#1 (excl)     | -46.8138 -37.3346   +12.0s | -56.9788 -44.0355   +12.0s |    N/A    N/A      N/A | -26.9726 -22.1502   +12.0s
+  FRC#2           | 0.2049 0.5789    +0.0s | -0.0200 0.3858    +0.0s | 0.6297 0.8381    +8.0s | 0.2600 0.4385    +1.0s
+  RV#3            | 0.5282 0.6477    +5.0s | 0.7332 0.5327    +4.0s | 0.7713 0.8965   +20.0s | 0.7276 0.5498    +5.0s
+  RV#4            | 0.8509 0.6259   +19.0s | 0.9069 0.4742   +11.0s | 0.8171 0.8223   +38.0s | 0.9002 0.4893   +14.0s
+  FRC#5           | 0.8530 0.5496   -19.0s | 0.9148 0.9361    -4.0s | 0.8927 0.9514    +4.0s | 0.9235 0.9491    -2.0s
+  FL#6            | 0.8454 0.8588    -8.0s | 0.9109 0.9244    -1.0s | 0.9575 0.9466    +7.0s | 0.9263 0.9432    +0.0s
+
+  Avg (fitted)    | 0.6565 0.6522    10.2s | 0.6892 0.6506     4.0s | 0.8137 0.8910    15.4s | 0.7475 0.6740     4.4s
+
+============================================================================================================================================
+PARAMETER COMPARISON (A vs B vs D)
+============================================================================================================================================
+
+  Param        |      Exp A |      Exp B |      Exp D
+  -------------+------------+------------+-----------
+  pvo2         |    31.2672 |    21.5652 |    19.4690
+  k_co2        |     0.1071 |     0.0667 |     0.0601
+  r_offset     |    -0.8661 |    -2.7752 |     1.6633
+  tau_reoxy    |    30.0000 |    30.0000 |    30.0000
+  mean_lag     |    22.5253 |    15.9602 |    15.7734
+  cv           |     0.2125 |     0.1139 |     0.1000
+  gamma        |     1.2001 |     1.4291 |     1.1321
+
+  Kernel comparison (A/B = co-trained, C = sensor-only, D = frozen from C):
+    Exp A: mean_lag=22.53, cv=0.213, k=22.14, std=4.8s
+    Exp B: mean_lag=15.96, cv=0.114, k=77.15, std=1.8s
+    Exp C: mean_lag=15.77, cv=0.100, k=100.00, std=1.6s
+    Exp D(frozen): mean_lag=15.77, cv=0.100, k=100.00, std=1.6s
+
+============================================================================================================================================
+MEAN_LAG PROFILE (9-point sweep, Exp A structure, smooth kernel)
+============================================================================================================================================
+    mean_lag=  5.0: loss=2257457.53, cv=0.129, nfev=1020888
+    mean_lag= 10.0: loss=1764737.19, cv=0.128, nfev=887268
+    mean_lag= 15.0: loss=1416674.35, cv=0.127, nfev=931128
+    mean_lag= 20.0: loss=1220275.38, cv=0.127, nfev=982128
+    mean_lag= 25.0: loss=1079012.99, cv=0.267, nfev=1020888
+    mean_lag= 30.0: loss=965630.47, cv=0.329, nfev=1020888
+    mean_lag= 35.0: loss=893613.37, cv=0.436, nfev=1020888
+    mean_lag= 40.0: loss=808938.95, cv=0.398, nfev=1020888
+    mean_lag= 45.0: loss=763013.61, cv=0.431, nfev=1022148
+
+  mean_lag |       loss |     pvo2 |    k_co2 | r_offset |       cv |    gamma
+  ---------+------------+----------+----------+----------+----------+---------
+       5.0 | 2257457.53 |    39.91 |   0.0777 |  -2.6941 |   0.1289 |   0.8000
+      10.0 | 1764737.19 |    34.45 |   0.0789 |  -1.8771 |   0.1276 |   0.8731
+      15.0 | 1416674.35 |    30.97 |   0.0849 |  -1.7914 |   0.1272 |   1.0183
+      20.0 | 1220275.38 |    28.88 |   0.0895 |  -1.0314 |   0.1272 |   1.1131
+      25.0 | 1079012.99 |    31.18 |   0.1148 |  -1.0957 |   0.2674 |   1.3924
+      30.0 |  965630.47 |    33.10 |   0.1293 |  -1.0090 |   0.3290 |   1.7142
+      35.0 |  893613.37 |    34.20 |   0.1378 |  -0.8996 |   0.4358 |   2.0280
+      40.0 |  808938.95 |    26.70 |   0.0200 |  -1.6525 |   0.3976 |   2.9989
+      45.0 |  763013.61 |    27.47 |   0.0200 |  -0.9014 |   0.4314 |   2.9996
+
+  Monotonically decreasing: YES (degenerate!)
+  Monotonically increasing: NO
+  Non-monotone: NO (degenerate)
+  Minimum loss at mean_lag=45.0
+
+Plot saved to /Users/thomastiotto/GitRepos/spO2_modelling/.claude/worktrees/model-v4-sensor/backend/scripts/exp_v6_06_sensor_first.png
+Kernel shape plot saved to /Users/thomastiotto/GitRepos/spO2_modelling/.claude/worktrees/model-v4-sensor/backend/scripts/exp_v6_06_kernel_shape.png
+Latent spline plot saved to /Users/thomastiotto/GitRepos/spO2_modelling/.claude/worktrees/model-v4-sensor/backend/scripts/exp_v6_06_latent.png
+mean_lag profile plot saved to /Users/thomastiotto/GitRepos/spO2_modelling/.claude/worktrees/model-v4-sensor/backend/scripts/exp_v6_06_mean_lag_profile.png
+
+============================================================================================================================================
+SUCCESS CRITERIA CHECK
+============================================================================================================================================
+
+  1. [Exp A] mean_lag profile non-monotone: FAIL (monotone)
+  2. [Exp A] cv=0.2125 truly interior (no cap): PASS
+  3. [Exp B] beta=1.3894 interpretable (positive?): PASS
+  4. [Exp B] Timing error avg=4.0s (<= 5s): PASS
+  5. [Exp B] Max |delta|=15.00 (< 20 = v6.05?): PASS
+  6. [Exp C] mean_lag=15.77 vs Exp A=22.53 (diff=6.75, <= 5s): FAIL
+  7. [Exp C] Latent splines plausible: PASS
+  8. [Exp D] R2(apnea) avg=0.7475 (>= 0.85): FAIL
+  9. [Exp D] tau_reoxy=30.00 (interior): FAIL (at bound)
+ 10. [Exp D] Physiology stability: pvo2 diff=11.80, gamma diff=0.07
