@@ -1,0 +1,510 @@
+v7 Model Specification: Two-Stage SpO2 Sensor + Physiology Model
+================================================================
+
+Version: v7.08 (shipping)
+Date: 2026-03-13
+Status: Descriptive model, single-session validation only
+
+This document is a self-contained specification for the v7 SpO2 model. A researcher
+with no prior context should be able to implement the model from this document alone.
+
+
+1. OVERVIEW
+-----------
+
+The model predicts pulse oximeter SpO2 readings during voluntary breath-hold apnea.
+It decomposes the problem into two stages:
+
+  Stage A: Sensor calibration. Fits a phenomenological latent SaO2 curve convolved
+           with a gamma-kernel sensor delay model.
+  Stage B: Physiology. Replaces the phenomenological latent curve with a mechanistic
+           gas-exchange model (exponential PaO2 washout + Bohr-shifted Severinghaus
+           ODC), using the sensor model frozen from Stage A.
+
+This two-stage decomposition is validated by the weak-lag diagnostic: refitting the
+sensor delay parameters in Stage B changes k_co2 by 0.1% and gamma by 0.5%,
+confirming the stages are cleanly separable.
+
+
+2. DATA REQUIREMENTS
+--------------------
+
+Input: Time-series SpO2 readings from a finger pulse oximeter during breath-hold
+apnea events.
+
+Required fields per hold:
+  - SpO2(t): oxygen saturation at 1 Hz
+  - t_start, t_end: apnea start and end times (seconds)
+  - Lung volume type: FL (functional lung/tidal), FRC (functional residual capacity),
+    or RV (residual volume)
+
+Derived quantities:
+  - B_h: baseline SpO2, computed as median(SpO2[t <= 20]) per hold
+  - Nadir: minimum SpO2 in the full window (apnea + recovery)
+  - Recovery window: t_end to t_end + 45s (Stage A) or t_end + 5s (Stage B)
+
+Current validation data:
+  - 1 subject, 1 session, Masimo MightySat (1 Hz, finger)
+  - 6 breath-holds, 4 used after QC (FRC#2, RV#3, FRC#5, FL#6)
+  - Hold durations: 132s, 126s, 185s, 366s (apnea windows)
+
+QC exclusion rules:
+  - Low variation: SpO2 range < 5% during apnea (excludes FL#1)
+  - Intra-apnea nadir: nadir occurs before t_end (excludes RV#4, structurally
+    different - subject resumed breathing during hold)
+
+QC flag (keep but note):
+  - Out-of-regime: apnea-window nadir occurs before t_end - 2s (flags FRC#2)
+
+
+3. STAGE A: SENSOR CALIBRATION
+-------------------------------
+
+3.1 Latent SaO2 Model (power-law descent + linear recovery)
+
+  if t <= t_end:
+    latent(t) = S_min + (B_h - S_min) * (1 - (t / t_end)^p)
+  if t > t_end:
+    latent(t) = S_min + v_up * (t - t_end)
+
+  where:
+    B_h = baseline SpO2 for hold h (locked, not fitted)
+    S_min = minimum latent SaO2 (per-hold)
+    p = power-law exponent (global, shared across holds)
+    v_up = recovery slope (per-hold)
+    t_end = end of apnea (from data)
+
+3.2 Sensor Pipeline
+
+  pred(t) = GammaKernel(latent, eff_lag_h, cv=0.15)
+  eff_lag_h = max(tau_0 + delta_h, 5.0)
+
+  The gamma kernel is a discrete convolution with a gamma-distribution impulse
+  response parameterized by its mean (eff_lag) and coefficient of variation (cv):
+    shape k = 1 / cv^2 = 44.44
+    scale theta = eff_lag / k
+    kernel(s) = Gamma(s; k, theta) for s = 0, 1, ..., ceil(eff_lag * 3)
+    filtered(t) = sum_{s} kernel(s) * latent(t - s)
+
+  Note: b_s (baseline scaling) is fixed at 1.0. The original formulation was
+  pred(t) = B_h + b_s * (filtered(t) - B_h), but b_s=1 simplifies to pred=filtered.
+
+3.3 Parameters (14 total)
+
+  Global (2):
+    tau_0:   sensor mean lag [5, 45] seconds
+    p:       power-law exponent [1.0, 5.0]
+
+  Per-hold (3 per hold, 12 total for 4 holds):
+    delta_h: lag offset [-20, 20] seconds
+    S_min:   minimum latent SaO2 [30, 100] %
+    v_up:    recovery slope [0, 3] %/s
+
+  Fixed:
+    b_s = 1.0, cv = 0.15
+
+3.4 Loss Function
+
+  Evaluation window: t <= t_end + 45s (apnea + 45s recovery)
+
+  L_fit = sum_h sum_t  StudentT_NLL(SpO2_obs(t) - pred(t); nu=4, sigma=1)
+
+  L_nadir = sum_h  Huber(nadir_time_obs - nadir_time_pred; delta=8s) * 500
+
+  Nadir timing uses clipped predictions: clip(pred(t), 0, 100).
+
+3.5 Priors (regularization)
+
+  tau_0:   LogNormal(log(18), 0.4)     lambda = 3.125
+  p:       LogNormal(log(3.5), 0.35)   lambda = 4.08
+  delta_h: StudentT-like shrinkage      lambda = 5
+           penalty = lambda * log(1 + (delta_h / 3)^2)
+  delta zero-sum: lambda = 500
+           penalty = lambda * (sum_h delta_h)^2
+
+  LogNormal prior form: penalty = lambda * (log(x) - log(center))^2
+  where lambda = 1/(2*sigma^2), same convention as Gaussian priors.
+
+3.6 Optimizer
+
+  Differential Evolution: popsize=40, maxiter=4000, seed=42, polish=True (L-BFGS-B)
+
+
+4. STAGE B: APNEA-ONLY PHYSIOLOGY
+----------------------------------
+
+Stage B replaces the phenomenological latent SaO2 with a mechanistic model.
+The sensor pipeline (tau_0, all delta_h) is frozen from Stage A.
+
+4.1 Gas Exchange Model
+
+  PaO2(t) = PvO2 + (PaO2_0 - PvO2) * exp(-t / tau_washout)
+
+  PaO2_0 = initial alveolar O2 partial pressure (per-hold)
+           Derived from paco2_0 using the alveolar gas equation:
+           PaO2_0 = FiO2 * (PB - PH2O) - paco2_0 / RQ
+           where FiO2 = 0.2093, PB = 760, PH2O = 47, RQ = 0.8
+
+  PvO2 = 25.0 mmHg (fixed, mixed venous PO2)
+  tau_washout = O2 washout time constant (per-hold, type-specific bounds)
+
+4.2 CO2 Accumulation (linear)
+
+  PaCO2(t) = paco2_0 + k_co2 * t
+
+  k_co2 = CO2 rise rate in mmHg/s (global)
+  paco2_0 = initial alveolar CO2 (per-hold)
+
+4.3 Bohr Effect (rightward P50 shift)
+
+  P50(t) = 26.6 + 0.48 * (PaCO2(t) - 40)
+
+  26.6 mmHg is the standard P50. The Bohr coefficient 0.48 is from Severinghaus.
+
+4.4 Severinghaus ODC with Gamma Steepness
+
+  Step 1: Virtual PO2 (Bohr shift)
+    PaO2_virtual = PaO2(t) * (26.6 / P50(t))
+
+  Step 2: Gamma power transform (steepness adjustment)
+    PaO2_adj = 26.6 * (PaO2_virtual / 26.6)^gamma
+
+  Step 3: Severinghaus (1979) equation
+    SaO2 = 100 / (1 + 23400 / (PaO2_adj^3 + 150 * PaO2_adj))
+
+  The gamma exponent adjusts the effective steepness of the ODC. gamma=1.0
+  recovers the standard Severinghaus curve; gamma>1 steepens it.
+
+4.5 Sensor Convolution (frozen from Stage A)
+
+  pred(t) = clip(GammaKernel(SaO2, eff_lag_h, cv=0.15), 0, 100)
+  eff_lag_h = max(tau_0 + delta_h, 5.0)   [tau_0, delta_h frozen]
+
+4.6 Parameters (10 total)
+
+  Global (2):
+    k_co2:  CO2 rise rate [0.02, 0.25] mmHg/s
+    gamma:  ODC steepness [0.8, 4.0]
+
+  Per-hold (2 per hold, 8 total for 4 holds):
+    tau_washout: O2 washout time constant (type-specific bounds, see below)
+    paco2_0:     initial alveolar CO2 (type-specific bounds, see below)
+
+  Fixed:
+    PvO2 = 25.0 mmHg
+    tau_0, delta_h: frozen from Stage A
+
+  Per-hold bounds by lung-volume type:
+    Type  | tau_washout     | paco2_0
+    ------+-----------------+---------
+    FL    | [50, 500]       | [20, 50]
+    FRC   | [20, 100]       | [25, 50]    <-- stabilizing constraint, do not widen
+    RV    | [10, 80]        | [30, 55]
+
+  The FRC tau_washout upper bound of 100 is a load-bearing structural constraint.
+  Widening it to 150 causes a cascade: k_co2 shifts by 29.5%, FL#6 tau_washout
+  hits its upper bound, and k_co2 loses identifiability (monotone profile). See
+  Section 7 for details.
+
+4.7 Loss Function
+
+  Evaluation window: t <= t_end + 5s (apnea only, minimal recovery)
+
+  L_fit = sum_h sum_t  w(t) * (SpO2_obs(t) - pred(t))^2
+
+  where w(t) = 3.0 if SpO2_obs(t) < 95, else 1.0
+
+  This is a weighted SSE. The 3x weight for low SpO2 ensures the model prioritizes
+  fitting the desaturation region over the flat plateau.
+
+4.8 Priors (regularization)
+
+  k_co2:   N(0.06, 0.02)   lambda = 1250
+  gamma:   N(2.0, 0.5)     lambda = 2.0
+  paco2_0: N(40, 3)        lambda = 0.056
+  per-hold IC -> type-mean: lambda = 10
+    penalty = lambda * sum_h (param_h - mean(params of same type))^2
+
+  Gaussian prior form: penalty = lambda * (x - mu)^2
+  where lambda = 1 / (2 * sigma^2). The sigma is absorbed into lambda.
+  Example: k_co2 prior N(0.06, 0.02) gives lambda = 1/(2*0.02^2) = 1250.
+
+  IMPORTANT - Prior scaling caveat:
+  All lambda values are calibrated to the current SSE loss scale (~3500 for 4 holds
+  at 1 Hz). If the loss function is normalized (e.g., divided by number of data
+  points), or if the sampling rate, number of holds, or evaluation window changes,
+  the priors must be rescaled to maintain the same relative influence.
+
+  k_co2 prior analysis:
+  The k_co2 prior center (0.06) is far from the fitted value (0.14). At face value,
+  the fitted value is 4 standard deviations from the prior center, which sounds
+  alarming. However, the actual prior penalty at k_co2=0.14 is:
+    1250 * (0.14 - 0.06)^2 = 1250 * 0.0064 = 8.0
+  Total Stage B loss is ~3526. The k_co2 prior contributes 8.0 / 3526 = 0.2% of
+  total loss. It is effectively non-binding.
+
+  This means the k_co2 is identified by the data alone, as confirmed by the profile
+  diagnostic (interior minimum at k_co2=0.13 without any k_co2 prior). The prior
+  could be removed entirely without affecting the fit. It is retained as a weak
+  safeguard for edge cases with fewer or shorter holds, but users should not interpret
+  it as meaningfully regularizing k_co2 in the current configuration.
+
+  If a meaningful prior is desired, either:
+  (a) Normalize the loss first, then set lambda to contribute ~5-10% of total loss, or
+  (b) Use a physiologically-derived prior: N(0.10, 0.05) covers the literature range
+      of 3-12 mmHg/min (0.05-0.20 mmHg/s) at 2 sigma.
+
+4.9 Optimizer
+
+  Differential Evolution: popsize=25, maxiter=2000, seed=42, polish=True (L-BFGS-B)
+
+
+5. FIT METRICS
+--------------
+
+  R2a: R-squared on the apnea window (t <= t_end). Primary metric.
+  R2n: R-squared on the nadir window (t_end - 30s to nadir + 30s). Secondary.
+  nadir_err: signed timing error of predicted nadir vs observed nadir (seconds).
+
+  Stage A targets: R2a > 0.90, nadir_err = 0 (enforced by Huber penalty).
+  Stage B targets: R2a > 0.93 (no nadir penalty, timing is emergent).
+
+
+6. FITTED PARAMETERS (this subject/session)
+--------------------------------------------
+
+Stage A:
+  tau_0 = 17.68s    [5, 45]    sensor mean lag
+  p     = 3.39      [1.0, 5.0] power-law exponent
+  b_s   = 1.0       (fixed)
+  cv    = 0.15      (fixed)
+
+  Per-hold deltas:
+    FRC#2: delta=-2.34  (eff_lag=15.3s)
+    RV#3:  delta=-8.01  (eff_lag=9.7s)
+    FRC#5: delta=+2.90  (eff_lag=20.6s)
+    FL#6:  delta=+7.45  (eff_lag=25.1s)
+
+Stage B:
+  k_co2 = 0.1385 mmHg/s   [0.02, 0.25]   interior
+  gamma = 1.8632           [0.8, 4.0]     interior
+
+  Per-hold:
+    FRC#2: tau_w=100.0 *BOUND*, paco2_0=38.4
+    RV#3:  tau_w=49.5,          paco2_0=30.0 *BOUND* (see Section 8.3)
+    FRC#5: tau_w=100.0 *BOUND*, paco2_0=39.4
+    FL#6:  tau_w=376.9,         paco2_0=42.6
+
+  Fit quality:
+    Hold  | R2a    | R2n    | nadir_err
+    ------+--------+--------+----------
+    FRC#2 | 0.9326 | 0.3366 | +17.0s    (see Section 8.1)
+    RV#3  | 0.9806 | 0.7371 |  +0.0s
+    FRC#5 | 0.9797 | 0.9773 |  +1.0s
+    FL#6  | 0.9946 | 0.9332 |  +0.0s
+
+  Mean R2a = 0.9719
+
+
+7. KEY STRUCTURAL PROPERTIES
+-----------------------------
+
+7.1 Gamma-k_co2 Tradeoff
+
+  There is a strong tradeoff between gamma and k_co2. In the k_co2 profile
+  (Section 6 of v7.08 results), gamma spans 1.63 to 2.61 across the k_co2
+  grid (span ~1.0). Higher k_co2 (faster CO2 rise) requires lower gamma
+  (less steep ODC) to maintain the same SpO2 trajectory, and vice versa.
+
+  This tradeoff is resolved by the FRC tau_washout constraint: with FRC holds
+  pinned at tau_w=100, the optimizer cannot freely trade washout rate against
+  CO2 rate, which pins the gamma-k_co2 balance.
+
+7.2 FRC Bounds as Structural Stabilization
+
+  FRC tau_washout at the upper bound (100s) is intentional, not a deficiency.
+  Widening FRC bounds to [20, 150] triggers:
+    - k_co2 shifts from 0.139 to 0.180 (29.5%)
+    - FL#6 tau_w jumps from 377 to 500 (at bound)
+    - k_co2 profile becomes monotone (loses identifiability)
+
+  The loss does decrease with wider FRC bounds (3526 to 3311), but the resulting
+  k_co2 of 0.18 (10.8 mmHg/min) is physiologically implausible. The lower loss
+  reflects overfitting, not a better model.
+
+7.3 k_co2 Identification
+
+  The k_co2 profile (k_co2 fixed on grid, all else free, no k_co2 prior) shows
+  a clear non-monotone profile with interior minimum at k_co2=0.13 (loss=3522).
+  The free fit lands at k_co2=0.139, consistent with the profile minimum.
+  Loss range across the profile: 412 (11.7% of minimum), indicating moderate
+  but sufficient identifiability.
+
+7.4 Two-Stage Decomposition Validity
+
+  Weak-lag diagnostic (refit deltas in Stage B with sigma=2s prior):
+    k_co2 divergence: 0.1%
+    gamma divergence: 0.5%
+  Both far below the 5% threshold. The stages are cleanly separable.
+
+
+8. KNOWN LIMITATIONS
+--------------------
+
+8.1 FRC#2 Stage B: Nadir Timing Failure
+
+  FRC#2 has a +17s nadir timing error in Stage B and R2n=0.34. The model predicts
+  the SpO2 nadir 17 seconds after it actually occurs, which is 13% of the 132s
+  hold duration. This is a qualitative timing failure, not just a "recovery
+  artifact."
+
+  Possible explanations:
+  - FRC#2 was flagged as out-of-regime in Stage A (apnea-window nadir before
+    t_end - 2s). The same pathology persists in Stage B.
+  - FRC#2's effective sensor lag (eff_lag=15.3s) is the shortest of all holds
+    (delta=-2.34), suggesting different peripheral perfusion dynamics for this
+    hold that the model struggles to capture in the physiology stage.
+  - The single-exponential PaO2 washout may be inadequate for FRC holds where
+    lung volume creates different washout dynamics than FL or RV holds.
+
+  Impact: FRC#2's apnea-window fit is acceptable (R2a=0.93), but the nadir
+  region is poorly modeled. This does not affect global parameter estimates
+  (FL#6 sensitivity shows <4% shift without any single hold).
+
+8.2 k_co2 is an Effective Parameter
+
+  The fitted k_co2 = 0.1385 mmHg/s = 8.3 mmHg/min. Published values for resting
+  breath-hold subjects are typically 3-6 mmHg/min. Values of 7-8+ mmHg/min are
+  seen in exercise or high metabolic rate conditions.
+
+  Two non-exclusive explanations:
+  (a) The subject's metabolic rate during these holds is genuinely elevated
+      (possible with the anxiety/effort of prolonged voluntary apnea).
+  (b) The model overestimates k_co2 to compensate for structural limitations,
+      particularly the single-exponential PaO2 washout's inability to capture
+      biphasic washout in long holds. FL#6 (366s) has tau_washout=377s, which
+      is very long for a single exponential. A two-compartment (fast + slow)
+      washout model would likely reduce the effective k_co2 needed.
+
+  Users should treat k_co2 as an effective parameter that absorbs some model
+  misspecification, not as a direct measurement of alveolar CO2 rise rate.
+
+8.3 RV#3 paco2_0 at Lower Bound
+
+  RV#3's paco2_0 = 30.0 mmHg, which is at the lower bound [30, 55]. Normal
+  resting PaCO2 is ~40 mmHg. A value of 30 is physiologically low, though
+  plausible after hyperventilation preceding a maximal exhalation (RV maneuver).
+
+  The fit quality for RV#3 is excellent (R2a=0.98), so this bound hit is not
+  causing visible problems. However, if the bound were lowered to 25, paco2_0
+  might drop further. This has not been tested and is flagged as an open question
+  for future work.
+
+8.4 Single-Session Scope
+
+  v7 is validated on N=1 subject, N=1 session, N=4 training holds. It is a
+  descriptive model: it fits its own training data. The LOHO-Inference diagnostic
+  (leave-one-hold-out, R2n=0.96 on held-out holds) provides within-session
+  cross-validation, but this is NOT out-of-sample validation.
+
+  Until at least one held-out session is tested, v7 should be characterized as
+  "a curve fit with diagnostics, not a validated model." Multi-session validation
+  is the single most important next step.
+
+  Parameter counts: 14 Stage A + 10 Stage B + regularization = 24 fitted
+  parameters for ~800 data points (1:33 ratio, acceptable). But all data come
+  from one session on one day with one device on one subject.
+
+8.5 Stage A Evaluates Recovery; Stage B Does Not
+
+  Stage A evaluation window: t <= t_end + 45s (includes 45s of recovery).
+  Stage B evaluation window: t <= t_end + 5s (apnea only, minimal bleed).
+
+  The Stage A nadir timing penalty explicitly uses the overall nadir, which for
+  3 of 4 holds occurs in the recovery window. So Stage A IS fitted to recovery
+  data, by design, because the sensor model needs to predict nadir timing.
+  Stage B deliberately excludes recovery because the physiology model (exponential
+  washout) does not model the re-oxygenation process.
+
+8.6 Recovery Phase Not Modeled
+
+  Stage B predicts only the apnea window. The recovery phase (SpO2 rebound after
+  breath release) is not modeled. This is intentional: the current use case is
+  apnea desaturation prediction, not full-cycle SpO2 modeling.
+
+
+9. APPLICABILITY DOMAIN
+-----------------------
+
+  What v7 covers:
+    - Single breath-hold apnea events, tested up to ~370s duration
+    - Apnea-window prediction only (not recovery)
+    - Finger pulse oximetry (Masimo MightySat, 1 Hz)
+    - FL, FRC, and RV lung volumes
+    - Primary fit metric: R2a (apnea window)
+
+  What v7 does NOT cover:
+    - Multiple sessions or subjects (untested)
+    - Multiple devices or sensor types (untested)
+    - Heart rate covariates (excluded, underpowered with N=4 holds)
+    - Holds shorter than ~120s (may not show enough desaturation)
+    - Recovery phase SpO2 dynamics
+    - Real-time / prospective prediction (all fits are retrospective)
+
+  Generalization status: NONE. All validation is within-session.
+
+
+10. SUCCESS CRITERIA (v7.08)
+----------------------------
+
+  1. k_co2 profile has interior minimum:           PASS (k_co2_opt=0.13)
+  2. Gamma interior to bounds:                      PASS (gamma=1.86)
+  3. No global params at bounds (Stage A):          PASS (0/3)
+  4. No global params at bounds (Stage B):          PASS (0/2)
+  5. FL#6 exclusion shift < 10%:                    PASS (1.7% gamma, 3.7% k_co2)
+  6. Weak-lag divergence < 5%:                      PASS (0.5% gamma, 0.1% k_co2)
+  7. FRC widening destabilizes (confirms [20,100]): PASS (29.5% k_co2 shift)
+  8. FL#6 tau_washout off bound:                    PASS (tau_w=377)
+
+  Score: 8/8 PASS
+
+
+11. NEXT STEPS
+--------------
+
+  Priority 1: Collect session #2 from the same subject
+    - Same device (Masimo MightySat), same finger
+    - Same protocol (mixed FL/FRC/RV breath-holds)
+    - Different day (>= 24h gap for physiological independence)
+    - Aim for 6+ holds
+    - Run v7.08 pipeline on session #2 and compare parameters
+
+  Priority 2: Multi-session cross-validation
+    - Freeze session #1 Stage A globals, infer session #2 per-hold params
+    - Test: does tau_0 match within ~2s? Does p match within ~0.5?
+    - Test: does k_co2 match within 20%?
+
+  NOT planned:
+    - Hill ODC (gamma is interior, current parameterization works)
+    - Heart rate covariates (underpowered with N=4 holds)
+    - Recovery modeling in Stage B (not the use case)
+    - Additional profiling on current session (everything is identified)
+
+
+12. REFERENCES
+--------------
+
+  Experiment files:
+    v7.06: backend/scripts/experiments/exp_v7_06/  (b_s ablation, config B selection)
+    v7.07: backend/scripts/experiments/exp_v7_07/  (gamma profile, FL#6 washout)
+    v7.08: backend/scripts/experiments/exp_v7_08/  (shipping config, k_co2 profile)
+
+  Key equations:
+    Severinghaus (1979): SaO2 = 100 / (1 + 23400 / (PO2^3 + 150*PO2))
+    Bohr shift: delta_P50 = 0.48 * delta_PaCO2 (per Severinghaus tables)
+    Alveolar gas equation: PAO2 = FiO2*(PB-PH2O) - PaCO2/RQ
+
+  Physiological constants:
+    P50_BASE = 26.6 mmHg (standard hemoglobin-oxygen affinity)
+    PvO2 = 25.0 mmHg (mixed venous, fixed)
+    FiO2 = 0.2093, PB = 760 mmHg, PH2O = 47 mmHg, RQ = 0.8

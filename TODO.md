@@ -3,9 +3,11 @@
 ## In Progress
 
 - [ ] Project scaffold and core model (Phase 1)
+- [ ] Collect session #2 data (same subject, same device, different day) for multi-session validation
 
 ## Planned
 
+- [ ] Multi-session cross-validation (freeze session #1 globals, test on session #2)
 - [ ] CSV upload and hold detection API
 - [ ] Hold tagging and fit preview/save endpoints
 - [ ] Model versioning and analysis endpoints
@@ -20,6 +22,11 @@
 
 _(newest first)_
 
+- [x] v7 model shipped (v7.08) - 8/8 success criteria PASS, formal methods spec written (2026-03-13)
+  - Two-stage sensor + physiology model for breath-hold apnea SpO2 prediction
+  - k_co2 identified (interior minimum at 0.13), all global params interior
+  - Formal spec: `backend/scripts/experiments/v7_methods_spec.txt`
+  - Scope: single subject/session, descriptive model, awaiting session #2 for validation
 - [x] Remove lag parameter — not needed, absorbed by tau_washout and ODC plateau (2026-02-25)
   - 8 → 7 fitted parameters, removes identifiability issue (lag vs tau_washout confounding)
   - DB migration: auto-drops `model_versions.lag` column on startup
