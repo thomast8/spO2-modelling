@@ -1,4 +1,4 @@
-// ── Session ──────────────────────────────────────────────────
+// -- Session ------------------------------------------------------------------
 
 export interface HoldSummary {
   id: number;
@@ -31,7 +31,7 @@ export interface SessionListItem {
   created_at: string;
 }
 
-// ── Hold ─────────────────────────────────────────────────────
+// -- Hold ---------------------------------------------------------------------
 
 export interface HoldDataPoint {
   elapsed_s: number;
@@ -53,21 +53,52 @@ export interface HoldDetailResponse {
   data_points: HoldDataPoint[];
 }
 
-// ── Fit ──────────────────────────────────────────────────────
+// -- v7 Fit -------------------------------------------------------------------
 
-export interface BoundsOverride {
-  lower: number;
-  upper: number;
-}
-
-export interface FitPreviewRequest {
-  hold_type: string;
+export interface V7FitPreviewRequest {
   hold_ids: number[];
-  bounds_override?: Record<string, BoundsOverride>;
+  excluded_ids?: number[];
   seed?: number;
 }
 
-export interface FitPrediction {
+export interface V7StageAPerHold {
+  hold_id: number;
+  hold_type: string;
+  delta: number;
+  s_min: number;
+  v_up: number;
+  eff_lag: number;
+  r_squared: number;
+}
+
+export interface V7StageAParams {
+  tau_0: number;
+  p: number;
+  b_s: number;
+  cv: number;
+  per_hold: V7StageAPerHold[];
+  converged: boolean;
+  objective_val: number;
+}
+
+export interface V7StageBPerHold {
+  hold_id: number;
+  hold_type: string;
+  tau_washout: number;
+  paco2_0: number;
+  r_squared: number;
+}
+
+export interface V7StageBParams {
+  k_co2: number;
+  gamma: number;
+  pvo2_fixed: number;
+  per_hold: V7StageBPerHold[];
+  converged: boolean;
+  objective_val: number;
+}
+
+export interface V7FitPrediction {
   hold_id: number;
   elapsed_s: number[];
   observed: number[];
@@ -75,70 +106,68 @@ export interface FitPrediction {
   r_squared: number;
 }
 
-export interface ApneaModelParams {
-  pao2_0: number;
-  pvo2: number;
-  tau_washout: number;
-  gamma: number;
-  bohr_max: number;
-  tau_bohr: number;
-  r_offset: number;
-  // Fixed constant (not fitted), included for display
-  p50_base: number;
-}
-
-export interface FitPreviewResponse {
-  params: ApneaModelParams;
-  r_squared: number;
-  r_squared_per_hold: number[];
-  objective_val: number;
-  converged: boolean;
-  n_holds: number;
-  n_data_points: number;
-  predictions: FitPrediction[];
-}
-
-export interface FitSaveRequest {
-  hold_type: string;
-  params: ApneaModelParams;
+export interface V7FitPreviewResponse {
+  stage_a: V7StageAParams;
+  stage_b: V7StageBParams;
+  predictions: V7FitPrediction[];
+  overall_r2: number;
   hold_ids: number[];
-  r_squared: number;
-  objective_val: number;
-  converged: boolean;
+}
+
+export interface V7FitSaveRequest {
+  stage_a: V7StageAParams;
+  stage_b: V7StageBParams;
+  predictions: V7FitPrediction[];
+  overall_r2: number;
+  hold_ids: number[];
+  s_base_values: Record<string, number>;
+  frozen_sensor: Record<string, unknown>;
   notes?: string;
   set_active?: boolean;
 }
 
-// ── Model Versions ───────────────────────────────────────────
+// -- v7 Model Versions --------------------------------------------------------
 
-export interface ModelVersionResponse {
+export interface V7ModelVersionResponse {
   id: number;
-  hold_type: string;
   version: number;
   is_active: boolean;
-  params: ApneaModelParams;
+  stage_a: V7StageAParams;
+  stage_b: V7StageBParams;
   r_squared: number;
   objective_val: number;
   converged: boolean;
-  n_holds_used: number;
   hold_ids: number[];
   notes: string | null;
   created_at: string;
 }
 
-export interface ModelVersionListResponse {
-  hold_type: string;
-  versions: ModelVersionResponse[];
+export interface V7ModelVersionListResponse {
+  versions: V7ModelVersionResponse[];
   active_version: number | null;
 }
 
-export interface AllModelsResponse {
-  FRC: ModelVersionListResponse;
-  RV: ModelVersionListResponse;
-  FL: ModelVersionListResponse;
+// -- v7 Prediction Curve ------------------------------------------------------
+
+export interface V7PredictionCurve {
+  hold_id: number;
+  t: number[];
+  spo2: number[];
+  pao2: number[];
+  p50_eff: number[];
+  sao2_raw: number[];
 }
 
-// ── Analysis ─────────────────────────────────────────────────
+// -- Background Task ----------------------------------------------------------
+
+export interface TaskStatusResponse {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  result: V7FitPreviewResponse | null;
+  error: string | null;
+}
+
+// -- Analysis -----------------------------------------------------------------
 
 export interface ThresholdResponse {
   threshold: number;
@@ -161,15 +190,12 @@ export interface DesatRatePoint {
   spo2: number;
 }
 
-export interface PredictionCurve {
-  t: number[];
-  spo2: number[];
-  spo2_base: number[];
-  pao2: number[];
-  p50_eff: number[];
-}
+// -- Bounds -------------------------------------------------------------------
 
-// ── Bounds ───────────────────────────────────────────────────
+export interface BoundsOverride {
+  lower: number;
+  upper: number;
+}
 
 export interface BoundsResponse {
   hold_type: string;

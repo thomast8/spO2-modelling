@@ -5,7 +5,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 
-# ── Session ──────────────────────────────────────────────────────────────────
+# -- Session ------------------------------------------------------------------
 
 
 class HoldSummary(BaseModel):
@@ -49,7 +49,7 @@ class SessionListItem(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ── Hold ─────────────────────────────────────────────────────────────────────
+# -- Hold ---------------------------------------------------------------------
 
 
 class HoldDataPoint(BaseModel):
@@ -85,27 +85,64 @@ class HoldUpdateRequest(BaseModel):
     include_in_fit: bool | None = None
 
 
-# ── Fit ──────────────────────────────────────────────────────────────────────
+# -- v7 Fit -------------------------------------------------------------------
 
 
-class BoundsOverride(BaseModel):
-    """Override for a single parameter bound."""
+class V7FitPreviewRequest(BaseModel):
+    """Request to start a v7 two-stage model fit."""
 
-    lower: float
-    upper: float
-
-
-class FitPreviewRequest(BaseModel):
-    """Request to preview a model fit."""
-
-    hold_type: str = Field(..., pattern="^(FRC|RV|FL)$")
     hold_ids: list[int]
-    bounds_override: dict[str, BoundsOverride] | None = None
+    excluded_ids: list[int] = Field(default_factory=list)
     seed: int = 42
 
 
-class FitPrediction(BaseModel):
-    """Prediction for a single hold within a fit."""
+class V7StageAPerHoldResponse(BaseModel):
+    """Stage A per-hold parameters."""
+
+    hold_id: int
+    hold_type: str
+    delta: float
+    s_min: float
+    v_up: float
+    eff_lag: float
+    r_squared: float
+
+
+class V7StageAParamsResponse(BaseModel):
+    """Stage A global + per-hold parameters."""
+
+    tau_0: float
+    p: float
+    b_s: float = 1.0
+    cv: float = 0.15
+    per_hold: list[V7StageAPerHoldResponse]
+    converged: bool
+    objective_val: float
+
+
+class V7StageBPerHoldResponse(BaseModel):
+    """Stage B per-hold parameters."""
+
+    hold_id: int
+    hold_type: str
+    tau_washout: float
+    paco2_0: float
+    r_squared: float
+
+
+class V7StageBParamsResponse(BaseModel):
+    """Stage B global + per-hold parameters."""
+
+    k_co2: float
+    gamma: float
+    pvo2_fixed: float = 25.0
+    per_hold: list[V7StageBPerHoldResponse]
+    converged: bool
+    objective_val: float
+
+
+class V7FitPrediction(BaseModel):
+    """Prediction for a single hold within a v7 fit."""
 
     hold_id: int
     elapsed_s: list[float]
@@ -114,64 +151,44 @@ class FitPrediction(BaseModel):
     r_squared: float
 
 
-class ApneaModelParamsResponse(BaseModel):
-    """Apnea model parameters (exponential washout + saturating Bohr effect).
+class V7FitPreviewResponse(BaseModel):
+    """Response from a v7 fit preview (not yet saved)."""
 
-    p50_base is a fixed haemoglobin constant, included for display only.
-    """
-
-    pao2_0: float
-    pvo2: float
-    tau_washout: float
-    gamma: float
-    bohr_max: float
-    tau_bohr: float
-    r_offset: float
-    # Fixed constant (not fitted), included for API transparency
-    p50_base: float = 26.6
-
-
-class FitPreviewResponse(BaseModel):
-    """Response from a fit preview (not yet saved)."""
-
-    params: ApneaModelParamsResponse
-    r_squared: float
-    r_squared_per_hold: list[float]
-    objective_val: float
-    converged: bool
-    n_holds: int
-    n_data_points: int
-    predictions: list[FitPrediction]
-
-
-class FitSaveRequest(BaseModel):
-    """Request to save a fit as a new model version."""
-
-    hold_type: str = Field(..., pattern="^(FRC|RV|FL)$")
-    params: ApneaModelParamsResponse
+    stage_a: V7StageAParamsResponse
+    stage_b: V7StageBParamsResponse
+    predictions: list[V7FitPrediction]
+    overall_r2: float
     hold_ids: list[int]
-    r_squared: float
-    objective_val: float
-    converged: bool
+
+
+class V7FitSaveRequest(BaseModel):
+    """Request to save a completed v7 fit."""
+
+    stage_a: V7StageAParamsResponse
+    stage_b: V7StageBParamsResponse
+    predictions: list[V7FitPrediction]
+    overall_r2: float
+    hold_ids: list[int]
+    s_base_values: dict[str, float]  # JSON keys are strings
+    frozen_sensor: dict  # FrozenSensor as dict
     notes: str | None = None
     set_active: bool = True
 
 
-# ── Model Versions ───────────────────────────────────────────────────────────
+# -- v7 Model Versions -------------------------------------------------------
 
 
-class ModelVersionResponse(BaseModel):
-    """Response for a model version."""
+class V7ModelVersionResponse(BaseModel):
+    """Response for a v7 model version."""
 
     id: int
-    hold_type: str
     version: int
     is_active: bool
-    params: ApneaModelParamsResponse
+    stage_a: V7StageAParamsResponse
+    stage_b: V7StageBParamsResponse
     r_squared: float
     objective_val: float
     converged: bool
-    n_holds_used: int
     hold_ids: list[int]
     notes: str | None
     created_at: datetime
@@ -179,23 +196,40 @@ class ModelVersionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ModelVersionListResponse(BaseModel):
-    """List of model versions for a hold type."""
+class V7ModelVersionListResponse(BaseModel):
+    """List of v7 model versions."""
 
-    hold_type: str
-    versions: list[ModelVersionResponse]
+    versions: list[V7ModelVersionResponse]
     active_version: int | None
 
 
-class AllModelsResponse(BaseModel):
-    """All model versions grouped by hold type."""
-
-    FRC: ModelVersionListResponse
-    RV: ModelVersionListResponse
-    FL: ModelVersionListResponse
+# -- v7 Prediction Curve -----------------------------------------------------
 
 
-# ── Analysis ─────────────────────────────────────────────────────────────────
+class V7PredictionCurveResponse(BaseModel):
+    """Full prediction curve for a hold from a v7 model."""
+
+    hold_id: int
+    t: list[float]
+    spo2: list[float]
+    pao2: list[float]
+    p50_eff: list[float]
+    sao2_raw: list[float]
+
+
+# -- Background Task ----------------------------------------------------------
+
+
+class TaskStatusResponse(BaseModel):
+    """Background task status for polling."""
+
+    id: str
+    status: str
+    result: V7FitPreviewResponse | None = None
+    error: str | None = None
+
+
+# -- Analysis -----------------------------------------------------------------
 
 
 class ThresholdResponse(BaseModel):
@@ -225,17 +259,14 @@ class DesatRatePointResponse(BaseModel):
     spo2: float
 
 
-class PredictionCurveResponse(BaseModel):
-    """Full prediction curve for visualization."""
-
-    t: list[float]
-    spo2: list[float]
-    spo2_base: list[float]
-    pao2: list[float]
-    p50_eff: list[float]
+# -- Bounds -------------------------------------------------------------------
 
 
-# ── Bounds ───────────────────────────────────────────────────────────────────
+class BoundsOverride(BaseModel):
+    """Override for a single parameter bound."""
+
+    lower: float
+    upper: float
 
 
 class BoundsResponse(BaseModel):

@@ -21,13 +21,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { getDesatRate, getSensitivity, getThreshold } from "../api/analysis";
 import { listAllModels, getPredictionCurve } from "../api/models";
-import type { HoldType } from "../api/types";
 import SpO2Chart from "../components/charts/SpO2Chart";
 
-const HOLD_TYPES: HoldType[] = ["FRC", "RV", "FL"];
-
 export default function AnalysisPage() {
-  const [holdType, setHoldType] = useState<HoldType>("FL");
   const [thresholdVal, setThresholdVal] = useState(40);
 
   const { data: models } = useQuery({
@@ -35,32 +31,36 @@ export default function AnalysisPage() {
     queryFn: listAllModels,
   });
 
-  // Find active model for selected type
-  const typeVersions = models?.[holdType]?.versions ?? [];
-  const activeModel = typeVersions.find((v) => v.is_active) ?? typeVersions[0];
+  // Find active v7 model
+  const activeModel = models?.versions.find((v) => v.is_active) ?? models?.versions[0];
+
+  // Hold selector (v7 predictions are per-hold)
+  const holdIds = activeModel?.hold_ids ?? [];
+  const [selectedHoldId, setSelectedHoldId] = useState<number | null>(null);
+  const holdId = selectedHoldId ?? holdIds[0] ?? null;
 
   const { data: curve } = useQuery({
-    queryKey: ["prediction", activeModel?.id],
-    queryFn: () => getPredictionCurve(activeModel!.id, 800),
-    enabled: !!activeModel,
+    queryKey: ["prediction", activeModel?.id, holdId],
+    queryFn: () => getPredictionCurve(activeModel!.id, holdId!, 800),
+    enabled: !!activeModel && holdId !== null,
   });
 
   const { data: thresholdResult } = useQuery({
-    queryKey: ["threshold", activeModel?.id, thresholdVal],
-    queryFn: () => getThreshold(activeModel!.id, thresholdVal),
-    enabled: !!activeModel,
+    queryKey: ["threshold", activeModel?.id, holdId, thresholdVal],
+    queryFn: () => getThreshold(activeModel!.id, holdId!, thresholdVal),
+    enabled: !!activeModel && holdId !== null,
   });
 
   const { data: sensitivity } = useQuery({
-    queryKey: ["sensitivity", activeModel?.id],
-    queryFn: () => getSensitivity(activeModel!.id),
-    enabled: !!activeModel,
+    queryKey: ["sensitivity", activeModel?.id, holdId],
+    queryFn: () => getSensitivity(activeModel!.id, holdId!),
+    enabled: !!activeModel && holdId !== null,
   });
 
   const { data: desatRate } = useQuery({
-    queryKey: ["desat-rate", activeModel?.id],
-    queryFn: () => getDesatRate(activeModel!.id),
-    enabled: !!activeModel,
+    queryKey: ["desat-rate", activeModel?.id, holdId],
+    queryFn: () => getDesatRate(activeModel!.id, holdId!),
+    enabled: !!activeModel && holdId !== null,
   });
 
   if (!models) {
@@ -77,18 +77,22 @@ export default function AnalysisPage() {
         Analysis
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-        Analyze fitted models: threshold prediction, VO₂ sensitivity, desaturation rates.
+        Analyze the active v7 model: threshold prediction, sensitivity, desaturation rates.
       </Typography>
 
-      {/* Model selector */}
+      {/* Model + hold selector */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Grid container spacing={2} alignItems="center">
           <Grid size={{ xs: 12, sm: 4 }}>
             <FormControl fullWidth size="small">
-              <InputLabel>Hold Type</InputLabel>
-              <Select value={holdType} label="Hold Type" onChange={(e) => setHoldType(e.target.value as HoldType)}>
-                {HOLD_TYPES.map((t) => (
-                  <MenuItem key={t} value={t}>{t}</MenuItem>
+              <InputLabel>Hold</InputLabel>
+              <Select
+                value={holdId ?? ""}
+                label="Hold"
+                onChange={(e) => setSelectedHoldId(Number(e.target.value))}
+              >
+                {holdIds.map((id) => (
+                  <MenuItem key={id} value={id}>Hold #{id}</MenuItem>
                 ))}
               </Select>
             </FormControl>
@@ -96,24 +100,24 @@ export default function AnalysisPage() {
           <Grid size={{ xs: 12, sm: 8 }}>
             {activeModel ? (
               <Typography variant="body2" color="text.secondary">
-                Using: <strong>v{activeModel.version}</strong> (R² = {activeModel.r_squared.toFixed(4)})
+                Using: <strong>v{activeModel.version}</strong> (R\u00B2 = {activeModel.r_squared.toFixed(4)})
               </Typography>
             ) : (
               <Alert severity="warning" sx={{ py: 0 }}>
-                No model available for {holdType}. Fit one first.
+                No v7 model available. Fit one first.
               </Alert>
             )}
           </Grid>
         </Grid>
       </Paper>
 
-      {activeModel && (
+      {activeModel && holdId !== null && (
         <Grid container spacing={3}>
           {/* Prediction curve with threshold */}
           <Grid size={{ xs: 12, lg: 8 }}>
             <Paper sx={{ p: 3 }}>
               <Typography variant="h6" gutterBottom>
-                Prediction Curve
+                Prediction Curve - Hold #{holdId}
               </Typography>
               {curve && (
                 <SpO2Chart
@@ -125,7 +129,7 @@ export default function AnalysisPage() {
               )}
               <Box sx={{ px: 2, mt: 2 }}>
                 <Typography variant="caption" color="text.secondary">
-                  SpO₂ Threshold: {thresholdVal}%
+                  SpO2 Threshold: {thresholdVal}%
                 </Typography>
                 <Slider
                   value={thresholdVal}
@@ -141,12 +145,12 @@ export default function AnalysisPage() {
                 <Box sx={{ mt: 1 }}>
                   {thresholdResult.crossing_time_s ? (
                     <Typography variant="body1">
-                      SpO₂ crosses <strong>{thresholdVal}%</strong> at{" "}
+                      SpO2 crosses <strong>{thresholdVal}%</strong> at{" "}
                       <strong>{thresholdResult.crossing_time_fmt}</strong> ({thresholdResult.crossing_time_s.toFixed(1)}s)
                     </Typography>
                   ) : (
                     <Typography variant="body1" color="text.secondary">
-                      SpO₂ does not reach {thresholdVal}% within simulation range
+                      SpO2 does not reach {thresholdVal}% within simulation range
                       {thresholdResult.spo2_at_end !== null && ` (ends at ${thresholdResult.spo2_at_end.toFixed(1)}%)`}
                     </Typography>
                   )}
@@ -167,7 +171,7 @@ export default function AnalysisPage() {
                     <TableHead>
                       <TableRow>
                         <TableCell>Time</TableCell>
-                        <TableCell>SpO₂</TableCell>
+                        <TableCell>SpO2</TableCell>
                         <TableCell>Rate (%/min)</TableCell>
                       </TableRow>
                     </TableHead>
@@ -188,11 +192,11 @@ export default function AnalysisPage() {
             </Paper>
           </Grid>
 
-          {/* VO2 Sensitivity */}
+          {/* Sensitivity */}
           <Grid size={{ xs: 12 }}>
             <Paper sx={{ p: 3 }}>
               <Typography variant="h6" gutterBottom>
-                VO₂ Sensitivity
+                tau_washout Sensitivity
               </Typography>
               {sensitivity && (
                 <TableContainer>
@@ -203,7 +207,7 @@ export default function AnalysisPage() {
                         <TableCell>Param Value</TableCell>
                         <TableCell>Crossing Time</TableCell>
                         <TableCell>Margin (s)</TableCell>
-                        <TableCell>SpO₂ at Ref</TableCell>
+                        <TableCell>SpO2 at Ref</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -219,10 +223,10 @@ export default function AnalysisPage() {
                           <TableCell>
                             {s.crossing_time_s
                               ? `${Math.floor(s.crossing_time_s / 60)}:${String(Math.round(s.crossing_time_s % 60)).padStart(2, "0")}`
-                              : "—"}
+                              : "\u2014"}
                           </TableCell>
                           <TableCell sx={{ color: (s.margin_s ?? 0) < 0 ? "error.main" : "text.primary" }}>
-                            {s.margin_s !== null ? `${s.margin_s > 0 ? "+" : ""}${s.margin_s.toFixed(1)}s` : "—"}
+                            {s.margin_s !== null ? `${s.margin_s > 0 ? "+" : ""}${s.margin_s.toFixed(1)}s` : "\u2014"}
                           </TableCell>
                           <TableCell>{s.spo2_at_ref.toFixed(1)}%</TableCell>
                         </TableRow>

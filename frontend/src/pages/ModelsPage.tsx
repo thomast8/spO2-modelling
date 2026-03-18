@@ -2,7 +2,6 @@ import {
   CheckCircle,
   ExpandLess,
   ExpandMore,
-  InfoOutlined as InfoIcon,
   RadioButtonUnchecked,
 } from "@mui/icons-material";
 import {
@@ -12,17 +11,18 @@ import {
   Chip,
   CircularProgress,
   Collapse,
+  FormControl,
   IconButton,
+  InputLabel,
+  MenuItem,
   Paper,
-  Tab,
+  Select,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Tabs,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -31,67 +31,102 @@ import { useState } from "react";
 import { InlineMath } from "react-katex";
 import { Link as RouterLink } from "react-router-dom";
 import { activateModel, getPredictionCurve, listAllModels } from "../api/models";
-import type { HoldType, ModelVersionResponse } from "../api/types";
+import type { V7ModelVersionResponse } from "../api/types";
 import SpO2Chart from "../components/charts/SpO2Chart";
-import { MODEL_SUMMARY, PARAM_DESCRIPTIONS } from "../constants/modelDescriptions";
+import { MODEL_SUMMARY } from "../constants/modelDescriptions";
 
-const HOLD_TYPES: HoldType[] = ["FRC", "RV", "FL"];
+function ModelDetail({ model }: { model: V7ModelVersionResponse }) {
+  const [selectedHoldId, setSelectedHoldId] = useState<number>(
+    model.hold_ids[0] ?? 0,
+  );
 
-const PARAM_LABELS: Record<string, string> = {
-  pao2_0: "PAO\u2082 Initial (mmHg)",
-  pvo2: "PvO\u2082 (mmHg)",
-  tau_washout: "\u03C4 Washout (s)",
-  bohr_max: "Bohr Max \u0394P50 (mmHg)",
-  tau_bohr: "\u03C4 Bohr (s)",
-  r_offset: "Offset (%)",
-  p50_base: "P50 Base (fixed)",
-  gamma: "Steepness (\u03B3)",
-};
-
-function ModelDetail({ model }: { model: ModelVersionResponse }) {
   const { data: curve } = useQuery({
-    queryKey: ["prediction", model.id],
-    queryFn: () => getPredictionCurve(model.id),
+    queryKey: ["prediction", model.id, selectedHoldId],
+    queryFn: () => getPredictionCurve(model.id, selectedHoldId),
+    enabled: selectedHoldId > 0,
   });
 
   return (
     <Box sx={{ mt: 2, mb: 2 }}>
-      <Box sx={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-        {/* Parameter table with tooltips */}
-        <Table size="small" sx={{ maxWidth: 400 }}>
-          <TableBody>
-            {Object.entries(model.params).map(([key, val]) => (
-              <TableRow key={key}>
-                <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
-                  <Tooltip title={PARAM_DESCRIPTIONS[key] ?? ""} arrow placement="right">
-                    <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
-                      {PARAM_LABELS[key] ?? key}
-                      {PARAM_DESCRIPTIONS[key] && (
-                        <InfoIcon sx={{ fontSize: 14, color: "text.secondary" }} />
-                      )}
-                    </Box>
-                  </Tooltip>
-                </TableCell>
-                <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
-                  {typeof val === "number" ? val.toFixed(4) : val}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      {/* Stage A params */}
+      <Typography variant="subtitle2" sx={{ mb: 1, color: "text.secondary" }}>
+        Stage A: Sensor (tau_0 = {model.stage_a.tau_0.toFixed(2)}s, p = {model.stage_a.p.toFixed(2)})
+      </Typography>
+      <Table size="small" sx={{ mb: 2 }}>
+        <TableHead>
+          <TableRow>
+            <TableCell>Hold</TableCell>
+            <TableCell>Type</TableCell>
+            <TableCell>delta</TableCell>
+            <TableCell>S_min</TableCell>
+            <TableCell>Eff. Lag</TableCell>
+            <TableCell>R\u00B2</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {model.stage_a.per_hold.map((ph) => (
+            <TableRow key={ph.hold_id}>
+              <TableCell>#{ph.hold_id}</TableCell>
+              <TableCell>{ph.hold_type}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{ph.delta.toFixed(2)}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{ph.s_min.toFixed(1)}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{ph.eff_lag.toFixed(1)}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{ph.r_squared.toFixed(4)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
 
-        {/* Prediction curve */}
-        <Box sx={{ flex: 1, minWidth: 300 }}>
-          {curve && (
-            <SpO2Chart
-              predictedT={curve.t}
-              predictedSpo2={curve.spo2}
-              title={`v${model.version} Prediction Curve`}
-              height={280}
-            />
-          )}
-        </Box>
+      {/* Stage B params */}
+      <Typography variant="subtitle2" sx={{ mb: 1, color: "text.secondary" }}>
+        Stage B: Physiology (k_co2 = {model.stage_b.k_co2.toFixed(4)}, gamma = {model.stage_b.gamma.toFixed(2)})
+      </Typography>
+      <Table size="small" sx={{ mb: 2 }}>
+        <TableHead>
+          <TableRow>
+            <TableCell>Hold</TableCell>
+            <TableCell>Type</TableCell>
+            <TableCell>tau_washout</TableCell>
+            <TableCell>paco2_0</TableCell>
+            <TableCell>R\u00B2</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {model.stage_b.per_hold.map((ph) => (
+            <TableRow key={ph.hold_id}>
+              <TableCell>#{ph.hold_id}</TableCell>
+              <TableCell>{ph.hold_type}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{ph.tau_washout.toFixed(2)}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{ph.paco2_0.toFixed(2)}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{ph.r_squared.toFixed(4)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+
+      {/* Prediction curve per hold */}
+      <Box sx={{ display: "flex", gap: 2, alignItems: "center", mb: 1 }}>
+        <FormControl size="small" sx={{ minWidth: 120 }}>
+          <InputLabel>Hold</InputLabel>
+          <Select
+            value={selectedHoldId}
+            label="Hold"
+            onChange={(e) => setSelectedHoldId(Number(e.target.value))}
+          >
+            {model.hold_ids.map((id) => (
+              <MenuItem key={id} value={id}>Hold #{id}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
       </Box>
+      {curve && (
+        <SpO2Chart
+          predictedT={curve.t}
+          predictedSpo2={curve.spo2}
+          title={`v${model.version} - Hold #${selectedHoldId}`}
+          height={280}
+        />
+      )}
     </Box>
   );
 }
@@ -108,7 +143,7 @@ function ModelSummaryCard() {
         <Box sx={{ flex: 1 }}>
           <Typography variant="h6" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             {MODEL_SUMMARY.title}
-            <Chip label="Hill ODC" size="small" color="primary" variant="outlined" />
+            <Chip label="v7 Two-Stage" size="small" color="primary" variant="outlined" />
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {MODEL_SUMMARY.description}
@@ -160,7 +195,6 @@ function ModelSummaryCard() {
 
 export default function ModelsPage() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState(0);
   const [expandedModel, setExpandedModel] = useState<number | null>(null);
 
   const { data: models, isLoading } = useQuery({
@@ -183,9 +217,7 @@ export default function ModelsPage() {
     );
   }
 
-  const holdType = HOLD_TYPES[activeTab];
-  const typeData = models?.[holdType];
-  const versions = typeData?.versions ?? [];
+  const versions = models?.versions ?? [];
 
   return (
     <Box>
@@ -193,42 +225,14 @@ export default function ModelsPage() {
         Model Versions
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-        View, compare, and activate model versions for each hold type.
+        View, compare, and activate v7 model versions. Each model fits all hold types simultaneously.
       </Typography>
 
       <ModelSummaryCard />
 
-      <Paper sx={{ mb: 3 }}>
-        <Tabs
-          value={activeTab}
-          onChange={(_, v) => setActiveTab(v)}
-          sx={{
-            "& .MuiTab-root": { fontWeight: 700, fontSize: "0.95rem" },
-          }}
-        >
-          {HOLD_TYPES.map((t) => (
-            <Tab
-              key={t}
-              label={
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  {t}
-                  <Chip
-                    label={models?.[t].versions.length ?? 0}
-                    size="small"
-                    color="primary"
-                    variant="outlined"
-                    sx={{ height: 20, fontSize: "0.7rem" }}
-                  />
-                </Box>
-              }
-            />
-          ))}
-        </Tabs>
-      </Paper>
-
       {versions.length === 0 ? (
         <Alert severity="info">
-          No models for {holdType} yet. Go to the Fit page to create one.
+          No v7 models yet. Go to the Upload & Fit page to create one.
         </Alert>
       ) : (
         <TableContainer component={Paper}>
@@ -236,8 +240,8 @@ export default function ModelsPage() {
             <TableHead>
               <TableRow>
                 <TableCell>Version</TableCell>
-                <TableCell>R²</TableCell>
-                <TableCell>Holds Used</TableCell>
+                <TableCell>R\u00B2</TableCell>
+                <TableCell>Holds</TableCell>
                 <TableCell>Converged</TableCell>
                 <TableCell>Notes</TableCell>
                 <TableCell>Created</TableCell>
@@ -263,7 +267,7 @@ export default function ModelsPage() {
                         color={v.r_squared > 0.95 ? "success" : v.r_squared > 0.9 ? "warning" : "error"}
                       />
                     </TableCell>
-                    <TableCell>{v.n_holds_used}</TableCell>
+                    <TableCell>{v.hold_ids.length}</TableCell>
                     <TableCell>{v.converged ? "Yes" : "No"}</TableCell>
                     <TableCell>
                       <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>

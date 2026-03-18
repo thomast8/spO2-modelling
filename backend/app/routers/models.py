@@ -1,4 +1,4 @@
-"""Model versioning API endpoints."""
+"""v7 model versioning API endpoints."""
 
 import json
 
@@ -9,149 +9,104 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.db_models import Hold, ModelVersion
+from app.models.db_models import Hold, ModelVersionV7
 from app.models.schemas import (
-    AllModelsResponse,
-    ApneaModelParamsResponse,
-    FitPrediction,
-    ModelVersionListResponse,
-    ModelVersionResponse,
-    PredictionCurveResponse,
+    V7FitPrediction,
+    V7ModelVersionListResponse,
+    V7ModelVersionResponse,
+    V7PredictionCurveResponse,
 )
-from app.services.analysis import generate_prediction_curve
-from app.services.hill_model import compute_r_squared, predict_spo2
-from app.services.model_manager import activate_model, get_active_model, get_model_versions
+from app.routers.fit import _model_to_response
+from app.services.model_manager import (
+    activate_model_v7,
+    get_active_model_v7,
+    get_model_versions_v7,
+)
+from app.services.v7_model import (
+    compute_r2,
+    predict_spo2_v7,
+    predict_spo2_v7_components,
+)
 
 router = APIRouter(prefix="/models", tags=["models"])
 
-VALID_HOLD_TYPES = ("FRC", "RV", "FL")
 
-
-def _model_to_response(model: ModelVersion) -> ModelVersionResponse:
-    """Convert ORM ModelVersion to response schema."""
-    params = model.to_model_params()
-    return ModelVersionResponse(
-        id=model.id,
-        hold_type=model.hold_type,
-        version=model.version,
-        is_active=model.is_active,
-        params=ApneaModelParamsResponse(**params.to_dict()),
-        r_squared=model.r_squared,
-        objective_val=model.objective_val,
-        converged=model.converged,
-        n_holds_used=model.n_holds_used,
-        hold_ids=json.loads(model.hold_ids_json),
-        notes=model.notes,
-        created_at=model.created_at,
-    )
-
-
-@router.get("", response_model=AllModelsResponse)
+@router.get("", response_model=V7ModelVersionListResponse)
 async def list_all_models(db: AsyncSession = Depends(get_db)):
-    """Get all model versions grouped by hold type."""
-    result = {}
-    for ht in VALID_HOLD_TYPES:
-        versions = await get_model_versions(db, ht)
-        active = next((v.version for v in versions if v.is_active), None)
-        result[ht] = ModelVersionListResponse(
-            hold_type=ht,
-            versions=[_model_to_response(v) for v in versions],
-            active_version=active,
-        )
-    return AllModelsResponse(**result)
-
-
-@router.get("/{hold_type}", response_model=ModelVersionListResponse)
-async def list_models_for_type(
-    hold_type: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get all versions for a specific hold type."""
-    if hold_type not in VALID_HOLD_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid hold_type: {hold_type}. Must be FRC, RV, or FL",
-        )
-
-    versions = await get_model_versions(db, hold_type)
+    """Get all v7 model versions."""
+    versions = await get_model_versions_v7(db)
     active = next((v.version for v in versions if v.is_active), None)
-    return ModelVersionListResponse(
-        hold_type=hold_type,
+    return V7ModelVersionListResponse(
         versions=[_model_to_response(v) for v in versions],
         active_version=active,
     )
 
 
-@router.get("/{hold_type}/active", response_model=ModelVersionResponse)
-async def get_active(
-    hold_type: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get the currently active model version for a hold type."""
-    if hold_type not in VALID_HOLD_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid hold_type: {hold_type}. Must be FRC, RV, or FL",
-        )
-
-    model = await get_active_model(db, hold_type)
+@router.get("/active", response_model=V7ModelVersionResponse)
+async def get_active(db: AsyncSession = Depends(get_db)):
+    """Get the currently active v7 model."""
+    model = await get_active_model_v7(db)
     if not model:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No active model for {hold_type}",
-        )
+        raise HTTPException(status_code=404, detail="No active v7 model")
     return _model_to_response(model)
 
 
-@router.post("/{model_id}/activate", response_model=ModelVersionResponse)
+@router.post("/{model_id}/activate", response_model=V7ModelVersionResponse)
 async def activate(
     model_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    """Set a model version as active (deactivates previous active version)."""
+    """Set a v7 model version as active."""
     try:
-        model = await activate_model(db, model_id)
+        model = await activate_model_v7(db, model_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from None
     return _model_to_response(model)
 
 
-@router.get("/{model_id}/predict", response_model=PredictionCurveResponse)
+@router.get("/{model_id}/predict", response_model=V7PredictionCurveResponse)
 async def predict_curve(
     model_id: int,
+    hold_id: int = Query(..., description="Hold ID for prediction"),
     t_max: float = Query(600.0, ge=10, le=1200, description="Max time in seconds"),
     dt: float = Query(1.0, ge=0.1, le=10, description="Time step in seconds"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate a prediction curve from a saved model."""
-    model = await db.get(ModelVersion, model_id)
+    """Generate a prediction curve for a specific hold from a saved v7 model."""
+    model = await db.get(ModelVersionV7, model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model version not found")
 
-    params = model.to_model_params()
-    curve = generate_prediction_curve(params, t_max=t_max, dt=dt)
+    params = model.to_v7_params()
+    t = np.arange(0, t_max, dt)
 
-    return PredictionCurveResponse(
-        t=curve["t"],
-        spo2=curve["spo2"],
-        spo2_base=curve["spo2_base"],
-        pao2=curve["pao2"],
-        p50_eff=curve["p50_eff"],
+    try:
+        components = predict_spo2_v7_components(t, hold_id, params)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+    return V7PredictionCurveResponse(
+        hold_id=hold_id,
+        t=t.tolist(),
+        spo2=components["spo2"].tolist(),
+        pao2=components["pao2"].tolist(),
+        p50_eff=components["p50_eff"].tolist(),
+        sao2_raw=components["sao2_raw"].tolist(),
     )
 
 
-@router.get("/{model_id}/hold-predictions", response_model=list[FitPrediction])
+@router.get("/{model_id}/hold-predictions", response_model=list[V7FitPrediction])
 async def get_hold_predictions(
     model_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    """Regenerate per-hold predictions from a saved model's parameters."""
-    model = await db.get(ModelVersion, model_id)
+    """Regenerate per-hold predictions from a saved v7 model's parameters."""
+    model = await db.get(ModelVersionV7, model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model version not found")
 
-    hold_ids = json.loads(model.hold_ids_json)
-    params = model.to_model_params()
+    hold_ids = model.get_hold_ids()
+    params = model.to_v7_params()
 
     result = await db.execute(
         select(Hold).where(Hold.id.in_(hold_ids)).options(selectinload(Hold.data_points))
@@ -162,10 +117,15 @@ async def get_hold_predictions(
     for hold in holds:
         elapsed_s = np.array([dp.elapsed_s for dp in hold.data_points], dtype=float)
         observed = np.array([dp.spo2 for dp in hold.data_points], dtype=float)
-        predicted = predict_spo2(elapsed_s, params)
-        r2 = compute_r_squared(observed, predicted)
+
+        try:
+            predicted = predict_spo2_v7(elapsed_s, hold.id, params)
+        except ValueError:
+            continue
+
+        r2 = compute_r2(observed, predicted)
         predictions.append(
-            FitPrediction(
+            V7FitPrediction(
                 hold_id=hold.id,
                 elapsed_s=elapsed_s.tolist(),
                 observed=observed.tolist(),

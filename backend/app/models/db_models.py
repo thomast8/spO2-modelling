@@ -1,5 +1,6 @@
 """SQLAlchemy ORM models for the SpO2 modelling database."""
 
+import json
 from datetime import date, datetime
 
 from sqlalchemy import (
@@ -132,6 +133,56 @@ class ModelVersion(Base):
             tau_bohr=self.tau_bohr,
             r_offset=self.r_offset,
         )
+
+
+class ModelVersionV7(Base):
+    """A fitted v7 two-stage model version (global, not per hold-type)."""
+
+    __tablename__ = "model_versions_v7"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # JSON-serialized stage params
+    stage_a_params_json: Mapped[str] = mapped_column(Text, nullable=False)
+    stage_b_params_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # JSON-serialized diagnostics
+    stage_a_diagnostics_json: Mapped[str] = mapped_column(Text, nullable=False)
+    stage_b_diagnostics_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Hold IDs used in the fit
+    hold_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Aggregate metrics
+    r_squared: Mapped[float] = mapped_column(Float, nullable=False)
+    objective_val: Mapped[float] = mapped_column(Float, nullable=False)
+    converged: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+    def to_v7_params(self):
+        """Deserialize JSON into V7ModelParams."""
+        from app.services.v7_model import V7ModelParams
+
+        combined = {
+            **json.loads(self.stage_a_params_json),
+            **json.loads(self.stage_b_params_json),
+        }
+        return V7ModelParams.from_dict(combined)
+
+    def get_stage_a_diagnostics(self) -> dict:
+        return json.loads(self.stage_a_diagnostics_json)
+
+    def get_stage_b_diagnostics(self) -> dict:
+        return json.loads(self.stage_b_diagnostics_json)
+
+    def get_hold_ids(self) -> list[int]:
+        return json.loads(self.hold_ids_json)
 
 
 class FitBounds(Base):

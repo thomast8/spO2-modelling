@@ -32,16 +32,9 @@ export default function DashboardPage() {
   }
 
   const totalHolds = sessions?.reduce((acc, s) => acc + s.n_holds, 0) ?? 0;
-  const totalVersions =
-    (models?.FRC.versions.length ?? 0) +
-    (models?.RV.versions.length ?? 0) +
-    (models?.FL.versions.length ?? 0);
-
-  const activeModels = [
-    models?.FRC.active_version ? "FRC" : null,
-    models?.RV.active_version ? "RV" : null,
-    models?.FL.active_version ? "FL" : null,
-  ].filter(Boolean);
+  const totalVersions = models?.versions.length ?? 0;
+  const activeModel = models?.versions.find((v) => v.is_active);
+  const activeLabel = activeModel ? `v${activeModel.version}` : "None";
 
   return (
     <Box>
@@ -80,7 +73,7 @@ export default function DashboardPage() {
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             label="Active Models"
-            value={activeModels.length > 0 ? activeModels.join(", ") : "None"}
+            value={activeLabel}
             icon={<ModelIcon />}
             color="warning.main"
           />

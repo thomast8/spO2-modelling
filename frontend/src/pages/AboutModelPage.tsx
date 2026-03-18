@@ -4,7 +4,8 @@ import {
   Science as ScienceIcon,
   ShowChart as CurveIcon,
   Tune as CorrectionIcon,
-  TuneOutlined as OffsetIcon,
+  Timer as DelayIcon,
+  Sensors as SensorIcon,
 } from "@mui/icons-material";
 import {
   Box,
@@ -36,60 +37,58 @@ import {
 import { chartColors, plotlyLayout } from "../theme";
 
 const PARAM_LABELS: Record<string, string> = {
-  pao2_0: "PAO\u2082 Initial",
-  pvo2: "PvO\u2082",
-  tau_washout: "\u03C4 Washout",
-  bohr_max: "Bohr Max \u0394P50",
-  tau_bohr: "\u03C4 Bohr",
-  r_offset: "Offset",
-  p50_base: "P50 Base (fixed)",
+  tau_0: "\u03C4\u2080 Sensor Lag",
+  p: "p (descent exponent)",
+  delta: "\u03B4 (lag offset)",
+  s_min: "S_min (nadir)",
+  v_up: "v_up (recovery)",
+  k_co2: "k_CO\u2082",
   gamma: "Steepness (\u03B3)",
+  tau_washout: "\u03C4 Washout",
+  paco2_0: "PACO\u2082\u2080",
+  p50_base: "P50 Base (fixed)",
+  pvo2_fixed: "PvO\u2082 (fixed)",
 };
 
 const PARAM_UNITS: Record<string, string> = {
-  pao2_0: "mmHg",
-  pvo2: "mmHg",
-  tau_washout: "seconds",
-  bohr_max: "mmHg",
-  tau_bohr: "seconds",
-  r_offset: "% SpO\u2082",
-  p50_base: "mmHg",
+  tau_0: "seconds",
+  p: "dimensionless",
+  delta: "seconds",
+  s_min: "% SpO\u2082",
+  v_up: "%/s",
+  k_co2: "mmHg/s",
   gamma: "dimensionless",
+  tau_washout: "seconds",
+  paco2_0: "mmHg",
+  p50_base: "mmHg",
+  pvo2_fixed: "mmHg",
 };
 
 const PARAM_RANGES: Record<string, string> = {
-  pao2_0: "70 \u2013 200",
-  pvo2: "25 \u2013 50",
-  tau_washout: "10 \u2013 250",
-  bohr_max: "2.0 \u2013 10.0",
-  tau_bohr: "60 \u2013 180",
-  r_offset: "\u22123.0 \u2013 3.0",
+  tau_0: "5 \u2013 45",
+  p: "1.0 \u2013 5.0",
+  delta: "-20 \u2013 20",
+  s_min: "30 \u2013 100",
+  v_up: "0.0 \u2013 3.0",
+  k_co2: "0.02 \u2013 0.25",
+  gamma: "0.8 \u2013 4.0",
+  tau_washout: "10 \u2013 500",
+  paco2_0: "20 \u2013 55",
   p50_base: "26.6 (fixed)",
-  gamma: "0.8 \u2013 2.0",
+  pvo2_fixed: "25.0 (fixed)",
 };
 
 const COMPONENT_ICONS: Record<string, ReactElement> = {
+  sensor: <SensorIcon />,
+  delay: <DelayIcon />,
   lungs: <LungsIcon />,
   curve: <CurveIcon />,
   correction: <CorrectionIcon />,
-  offset: <OffsetIcon />,
 };
 
 const HOLD_TYPE_ORDER = ["FRC", "RV", "FL"] as const;
 
-// Default parameters for demonstration charts (typical FL hold)
 const P50_BASE = 26.6;
-
-const DEMO_PARAMS = {
-  pao2_0: 120,
-  pvo2: 40,
-  tau_washout: 80,
-  gamma: 1.0,
-  bohr_max: 5.0,
-  tau_bohr: 120,
-  r_offset: 0,
-};
-
 const CHART_HEIGHT = 280;
 
 const chartLayout: Partial<Layout> = {
@@ -105,27 +104,25 @@ const chartLayout: Partial<Layout> = {
   },
 };
 
-// ── Helper: generate time array ──────────────────────────────
 function linspace(start: number, end: number, n: number): number[] {
   const step = (end - start) / (n - 1);
   return Array.from({ length: n }, (_, i) => start + i * step);
 }
 
-// ── Chart 1: PAO2 washout over time ─────────────────────────
+// -- Chart: PAO2 washout per hold type ----------------------------------------
+
 function PAO2WashoutChart() {
   const t = useMemo(() => linspace(0, 400, 300), []);
 
   const traces: Data[] = useMemo(() => {
     const holdTypes = [
-      { name: "FL (\u03C4=80s, PAO\u2082\u2080=120)", pao2_0: 120, tau: 80, color: chartColors.spo2Fit },
-      { name: "FRC (\u03C4=40s, PAO\u2082\u2080=100)", pao2_0: 100, tau: 40, color: chartColors.residual },
-      { name: "RV (\u03C4=25s, PAO\u2082\u2080=85)", pao2_0: 85, tau: 25, color: chartColors.threshold },
+      { name: "FL (\u03C4=80s)", pao2_0: 120, tau: 80, color: chartColors.spo2Fit },
+      { name: "FRC (\u03C4=40s)", pao2_0: 100, tau: 40, color: chartColors.residual },
+      { name: "RV (\u03C4=25s)", pao2_0: 85, tau: 25, color: chartColors.threshold },
     ];
     return holdTypes.map(({ name, pao2_0, tau, color }) => ({
       x: t,
-      y: t.map((ti) => {
-        return DEMO_PARAMS.pvo2 + (pao2_0 - DEMO_PARAMS.pvo2) * Math.exp(-ti / tau);
-      }),
+      y: t.map((ti) => 25.0 + (pao2_0 - 25.0) * Math.exp(-ti / tau)),
       type: "scatter" as const,
       mode: "lines" as const,
       name,
@@ -149,17 +146,16 @@ function PAO2WashoutChart() {
   );
 }
 
-// ── Chart 2: Severinghaus dissociation curve ────────────────
+// -- Chart: Severinghaus ODC --------------------------------------------------
+
 function SeveringhausCurveChart() {
   const pao2 = useMemo(() => linspace(0.1, 120, 300), []);
 
-  // Severinghaus: SO2 = 100 / (1 + 23400/(x^3 + 150*x))
   const severinghaus = (x: number) => {
     const clamped = Math.max(x, 0.01);
     return 100.0 / (1.0 + 23400.0 / (Math.pow(clamped, 3) + 150.0 * clamped));
   };
 
-  // With gamma: apply power transform around P50
   const severinghausGamma = (x: number, gamma: number) => {
     const clamped = Math.max(x, 0.01);
     const xAdj = P50_BASE * Math.pow(clamped / P50_BASE, gamma);
@@ -168,9 +164,9 @@ function SeveringhausCurveChart() {
 
   const traces: Data[] = useMemo(() => {
     const curves = [
-      { gamma: 0.8, name: "\u03B3 = 0.8 (shallower)", color: chartColors.residual, dash: "dot" as const },
       { gamma: 1.0, name: "\u03B3 = 1.0 (standard)", color: chartColors.spo2Fit, dash: "solid" as const },
-      { gamma: 1.5, name: "\u03B3 = 1.5 (steeper)", color: chartColors.hr, dash: "dash" as const },
+      { gamma: 2.0, name: "\u03B3 = 2.0 (steeper)", color: chartColors.hr, dash: "dash" as const },
+      { gamma: 3.0, name: "\u03B3 = 3.0 (very steep)", color: chartColors.threshold, dash: "dot" as const },
     ];
     const result: Data[] = curves.map(({ gamma, name, color, dash }) => ({
       x: pao2,
@@ -180,7 +176,6 @@ function SeveringhausCurveChart() {
       name,
       line: { color, width: 2.5, dash },
     }));
-    // P50 marker line
     result.push({
       x: [P50_BASE, P50_BASE],
       y: [0, 50],
@@ -206,9 +201,9 @@ function SeveringhausCurveChart() {
       data={traces}
       layout={{
         ...chartLayout,
-        title: { text: "Oxygen\u2013Haemoglobin Dissociation Curve (Severinghaus)", font: { size: 13 } },
+        title: { text: "Severinghaus ODC with gamma steepness", font: { size: 13 } },
         xaxis: { ...chartLayout.xaxis, title: { text: "PaO\u2082 eff (mmHg-eq.)" } },
-        yaxis: { ...chartLayout.yaxis, title: { text: "SpO\u2082 (%)" }, range: [0, 105] },
+        yaxis: { ...chartLayout.yaxis, title: { text: "SaO\u2082 (%)" }, range: [0, 105] },
       }}
       config={{ displayModeBar: false, responsive: true }}
       useResizeHandler
@@ -217,21 +212,21 @@ function SeveringhausCurveChart() {
   );
 }
 
-// ── Chart 3: Saturating Bohr effect — P50 shift over time ───
+// -- Chart: Linear CO2 Bohr effect -------------------------------------------
+
 function BohrEffectChart() {
   const t = useMemo(() => linspace(0, 400, 300), []);
 
   const traces: Data[] = useMemo(() => {
-    const bohrCurves = [
-      { bmax: 0.0, tau: 120, name: "No Bohr effect", color: "rgba(0,0,0,0.3)", dash: "dot" as const },
-      { bmax: 4.0, tau: 120, name: "\u0394max=4, \u03C4=120s (mild)", color: chartColors.spo2Fit, dash: "solid" as const },
-      { bmax: 6.0, tau: 90, name: "\u0394max=6, \u03C4=90s (strong)", color: chartColors.threshold, dash: "dash" as const },
+    const curves = [
+      { k_co2: 0.0, paco2_0: 40, name: "No CO\u2082 effect", color: "rgba(0,0,0,0.3)", dash: "dot" as const },
+      { k_co2: 0.04, paco2_0: 40, name: "k=0.04, mild", color: chartColors.spo2Fit, dash: "solid" as const },
+      { k_co2: 0.06, paco2_0: 40, name: "k=0.06, typical", color: chartColors.hr, dash: "dash" as const },
+      { k_co2: 0.10, paco2_0: 40, name: "k=0.10, strong", color: chartColors.threshold, dash: "dashdot" as const },
     ];
-    return bohrCurves.map(({ bmax, tau, name, color, dash }) => ({
+    return curves.map(({ k_co2, paco2_0, name, color, dash }) => ({
       x: t,
-      y: t.map((ti) => {
-        return P50_BASE + bmax * (1 - Math.exp(-ti / Math.max(tau, 0.01)));
-      }),
+      y: t.map((ti) => P50_BASE + 0.48 * (paco2_0 + k_co2 * ti - 40)),
       type: "scatter" as const,
       mode: "lines" as const,
       name,
@@ -244,7 +239,7 @@ function BohrEffectChart() {
       data={traces}
       layout={{
         ...chartLayout,
-        title: { text: "Saturating Bohr Effect: P50 Shift Over Time", font: { size: 13 } },
+        title: { text: "Linear CO\u2082 Bohr Effect: P50 Over Time", font: { size: 13 } },
         xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
         yaxis: { ...chartLayout.yaxis, title: { text: "P50 effective (mmHg)" } },
       }}
@@ -255,73 +250,14 @@ function BohrEffectChart() {
   );
 }
 
-// ── Chart for full model ─────────────────────────────────────
-function FullModelChart() {
-  const t = useMemo(() => linspace(0, 400, 400), []);
-
-  const traces: Data[] = useMemo(() => {
-    const p = DEMO_PARAMS;
-    const pao2Arr = t.map((ti) => {
-      return p.pvo2 + (p.pao2_0 - p.pvo2) * Math.exp(-ti / p.tau_washout);
-    });
-    const spo2 = t.map((ti, i) => {
-      const pao2 = pao2Arr[i];
-      const p50Eff = P50_BASE + p.bohr_max * (1 - Math.exp(-ti / Math.max(p.tau_bohr, 0.01)));
-      const pao2Virtual = pao2 * (P50_BASE / p50Eff);
-      const pao2Adj = P50_BASE * Math.pow(Math.max(pao2Virtual, 0.01) / P50_BASE, p.gamma);
-      const base = 100.0 / (1.0 + 23400.0 / (Math.pow(pao2Adj, 3) + 150.0 * pao2Adj));
-      return Math.min(Math.max(base + p.r_offset, 0), 100);
-    });
-
-    return [
-      {
-        x: t, y: pao2Arr,
-        type: "scatter" as const, mode: "lines" as const,
-        name: "PAO\u2082 (mmHg)",
-        line: { color: chartColors.residual, width: 1.5, dash: "dash" as const },
-        yaxis: "y2",
-      },
-      {
-        x: t, y: spo2,
-        type: "scatter" as const, mode: "lines" as const,
-        name: "SpO\u2082(t)",
-        line: { color: chartColors.spo2Fit, width: 3 },
-      },
-    ];
-  }, [t]);
-
-  return (
-    <Plot
-      data={traces}
-      layout={{
-        ...chartLayout,
-        height: 320,
-        title: { text: "Complete Model Output (FL hold, typical parameters)", font: { size: 13 } },
-        xaxis: { ...chartLayout.xaxis, title: { text: "Time (s)" } },
-        yaxis: { ...chartLayout.yaxis, title: { text: "SpO\u2082 (%)" }, range: [0, 105] },
-        yaxis2: {
-          title: { text: "PAO\u2082 (mmHg)" },
-          overlaying: "y",
-          side: "right",
-          showgrid: false,
-          range: [30, 130],
-        },
-      }}
-      config={{ displayModeBar: false, responsive: true }}
-      useResizeHandler
-      style={{ width: "100%", height: 320 }}
-    />
-  );
-}
-
-// Map component icons to their charts
+// Map component icons to charts
 const COMPONENT_CHARTS: Record<string, () => ReactElement> = {
   lungs: () => <PAO2WashoutChart />,
   curve: () => <SeveringhausCurveChart />,
   correction: () => <BohrEffectChart />,
 };
 
-// ── Section helpers ──────────────────────────────────────────
+// -- Section helpers ----------------------------------------------------------
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
@@ -351,30 +287,25 @@ function LatexBlock({ latex }: { latex: string }) {
   );
 }
 
-// ── Main page ────────────────────────────────────────────────
+// -- Main page ----------------------------------------------------------------
 
 export default function AboutModelPage() {
   return (
     <Box sx={{ maxWidth: 900, pb: 6 }}>
-      {/* ── Header ──────────────────────────────────────────────── */}
+      {/* Header */}
       <Typography variant="h4" gutterBottom>
-        About the Model
+        About the v7 Two-Stage Model
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
         {MODEL_SUMMARY.description}
       </Typography>
 
-      {/* ── Full model overview chart ──────────────────────────── */}
-      <Paper sx={{ p: 2, mt: 3 }}>
-        <FullModelChart />
-      </Paper>
-
-      {/* ── Overview equations ──────────────────────────────────── */}
+      {/* Overview equations */}
       <SectionTitle>Model Equations</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        The complete model is built from three layered equations. Each transforms
-        the output of the previous step, from alveolar PO&#x2082; washout down to the
-        final SpO&#x2082; prediction.
+        The v7 model is built in two stages. Stage A calibrates the sensor response,
+        Stage B fits the underlying apnea physiology with the sensor model frozen.
+        The final SpO&#x2082; prediction flows through four equations.
       </Typography>
       <Paper sx={{ p: 2.5 }}>
         {MODEL_SUMMARY.equations.map((eq, i) => (
@@ -389,12 +320,12 @@ export default function AboutModelPage() {
         ))}
       </Paper>
 
-      {/* ── Model Components ───────────────────────────────────── */}
+      {/* Model Components */}
       <SectionTitle>Model Components</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        The model decomposes SpO&#x2082; prediction into physiological
-        components. Each section below explains the component, its equation, and
-        includes an interactive chart showing how the component behaves.
+        The model is decomposed into sensor and physiology components across two stages.
+        Stage A (sensor calibration) runs first, then Stage B (apnea physiology)
+        runs with the sensor model frozen.
       </Typography>
 
       {MODEL_COMPONENTS.map((comp) => {
@@ -432,7 +363,6 @@ export default function AboutModelPage() {
               {comp.detail}
             </Typography>
 
-            {/* Interactive chart for this component */}
             {ChartFn && <ChartFn />}
 
             <Box sx={{ mt: 2, display: "flex", gap: 1, flexWrap: "wrap" }}>
@@ -452,11 +382,11 @@ export default function AboutModelPage() {
         );
       })}
 
-      {/* ── Parameter Reference ────────────────────────────────── */}
+      {/* Parameter Reference */}
       <SectionTitle>Parameter Reference</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Seven fitted parameters and one fixed haemoglobin constant, with their
-        units, typical ranges (across all hold types), and physical interpretation.
+        The v7 model has global parameters shared across all holds (tau_0, p, k_co2, gamma)
+        and per-hold parameters (delta, S_min, v_up, tau_washout, paco2_0), plus fixed constants.
       </Typography>
 
       <TableContainer component={Paper}>
@@ -465,7 +395,7 @@ export default function AboutModelPage() {
             <TableRow>
               <TableCell sx={{ fontWeight: 700 }}>Parameter</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>Units</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>Typical Range</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>Range</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>Description</TableCell>
             </TableRow>
           </TableHead>
@@ -490,12 +420,12 @@ export default function AboutModelPage() {
         </Table>
       </TableContainer>
 
-      {/* ── Hold Types ─────────────────────────────────────────── */}
+      {/* Hold Types */}
       <SectionTitle>Hold Types</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Breath holds are classified by the lung volume at hold onset. Each type
-        has different initial PAO&#x2082; and washout time constants, with correspondingly
-        different parameter bounds for the fit.
+        has different washout time constants, with correspondingly different
+        parameter bounds for tau_washout and paco2_0.
       </Typography>
 
       <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
@@ -514,7 +444,7 @@ export default function AboutModelPage() {
               </Typography>
               <Divider sx={{ mb: 1 }} />
               <Typography variant="caption" color="text.secondary">
-                Initial PAO&#x2082; range:{" "}
+                Bounds:{" "}
                 <Typography component="span" variant="caption" sx={{ fontWeight: 600, fontFamily: "monospace" }}>
                   {info.o2Range}
                 </Typography>
@@ -524,7 +454,7 @@ export default function AboutModelPage() {
         })}
       </Box>
 
-      {/* ── Fitting Process ────────────────────────────────────── */}
+      {/* Fitting Process */}
       <SectionTitle>{FITTING_DESCRIPTION.title}</SectionTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {FITTING_DESCRIPTION.summary}

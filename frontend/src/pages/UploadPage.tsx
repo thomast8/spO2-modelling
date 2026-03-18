@@ -9,6 +9,7 @@ import {
   FormControl,
   Grid,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Paper,
   Select,
@@ -16,45 +17,33 @@ import {
   TableBody,
   TableCell,
   TableContainer,
+  TableHead,
   TableRow,
   TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { useSearchParams } from "react-router-dom";
-import { previewFit, saveFit } from "../api/fit";
+import { pollFitTask, saveFit, submitFitPreview } from "../api/fit";
 import { getHold, updateHold } from "../api/holds";
 import { getHoldPredictions, listAllModels } from "../api/models";
 import { deleteSession, listSessions, getSession, uploadSession } from "../api/sessions";
 import type {
-  FitPrediction,
-  FitPreviewResponse,
   HoldSummary,
-  HoldType,
   SessionResponse,
+  V7FitPrediction,
+  V7FitPreviewResponse,
 } from "../api/types";
 import SpO2Chart from "../components/charts/SpO2Chart";
 import { PARAM_DESCRIPTIONS } from "../constants/modelDescriptions";
 
 const HOLD_TYPE_OPTIONS = ["untagged", "FRC", "RV", "FL"] as const;
 const HOLD_TYPE_LABELS: Record<string, string> = { untagged: "Skip" };
-const FIT_HOLD_TYPES: HoldType[] = ["FRC", "RV", "FL"];
 
-const PARAM_LABELS: Record<string, string> = {
-  pao2_0: "PAO\u2082 Initial (mmHg)",
-  pvo2: "PvO\u2082 (mmHg)",
-  tau_washout: "\u03C4 Washout (s)",
-  bohr_max: "Bohr Max \u0394P50 (mmHg)",
-  tau_bohr: "\u03C4 Bohr (s)",
-  r_offset: "Offset (%)",
-  p50_base: "P50 Base (fixed)",
-  gamma: "Steepness (\u03B3)",
-};
-
-// ── Hold card with optional fit overlay ──────────────────────
+// -- Hold card ----------------------------------------------------------------
 
 function HoldCard({
   hold,
@@ -62,7 +51,7 @@ function HoldCard({
   onTagChange,
 }: {
   hold: HoldSummary;
-  prediction?: FitPrediction;
+  prediction?: V7FitPrediction;
   onTagChange?: (holdId: number, newType: string) => void;
 }) {
   const queryClient = useQueryClient();
@@ -144,10 +133,9 @@ function HoldCard({
   );
 }
 
-// ── Fit result card per hold type ────────────────────────────
+// -- v7 Fit result card -------------------------------------------------------
 
-function FitResultCard({
-  holdType,
+function V7FitResultCard({
   result,
   notes,
   onNotesChange,
@@ -156,8 +144,7 @@ function FitResultCard({
   saving,
   saved,
 }: {
-  holdType: HoldType;
-  result: FitPreviewResponse;
+  result: V7FitPreviewResponse;
   notes: string;
   onNotesChange: (v: string) => void;
   onSave: () => void;
@@ -168,41 +155,135 @@ function FitResultCard({
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
-        <Typography variant="h6">
-          {holdType} Fit Results
-        </Typography>
+        <Typography variant="h6">v7 Fit Results</Typography>
         <Box sx={{ display: "flex", gap: 1 }}>
           <Chip
-            label={`R\u00B2 = ${result.r_squared.toFixed(4)}`}
-            color={result.r_squared > 0.95 ? "success" : result.r_squared > 0.9 ? "warning" : "error"}
+            label={`R\u00B2 = ${result.overall_r2.toFixed(4)}`}
+            color={result.overall_r2 > 0.95 ? "success" : result.overall_r2 > 0.9 ? "warning" : "error"}
           />
           <Chip
-            label={result.converged ? "Converged" : "Not converged"}
-            color={result.converged ? "success" : "warning"}
+            label={result.stage_a.converged && result.stage_b.converged ? "Both stages converged" : "Convergence warning"}
+            color={result.stage_a.converged && result.stage_b.converged ? "success" : "warning"}
             variant="outlined"
           />
-          <Chip label={`${result.n_holds} hold${result.n_holds !== 1 ? "s" : ""}`} size="small" variant="outlined" />
+          <Chip label={`${result.hold_ids.length} holds`} size="small" variant="outlined" />
         </Box>
       </Box>
 
-      <TableContainer sx={{ mb: 3 }}>
+      {/* Stage A summary */}
+      <Typography variant="subtitle2" sx={{ mb: 1, color: "text.secondary" }}>
+        Stage A: Sensor Calibration
+      </Typography>
+      <TableContainer sx={{ mb: 2 }}>
         <Table size="small">
           <TableBody>
-            {Object.entries(result.params).map(([key, val]) => (
-              <TableRow key={key}>
-                <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
-                  <Tooltip title={PARAM_DESCRIPTIONS[key] ?? ""} arrow placement="right">
-                    <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
-                      {PARAM_LABELS[key] ?? key}
-                      {PARAM_DESCRIPTIONS[key] && (
-                        <InfoIcon sx={{ fontSize: 14, color: "text.secondary" }} />
-                      )}
-                    </Box>
-                  </Tooltip>
-                </TableCell>
-                <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
-                  {typeof val === "number" ? val.toFixed(4) : val}
-                </TableCell>
+            <TableRow>
+              <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
+                <Tooltip title="Base sensor lag in seconds" arrow>
+                  <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
+                    tau_0 (s) <InfoIcon sx={{ fontSize: 14, color: "text.secondary" }} />
+                  </Box>
+                </Tooltip>
+              </TableCell>
+              <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
+                {result.stage_a.tau_0.toFixed(2)}
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
+                <Tooltip title="Power-law descent exponent" arrow>
+                  <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
+                    p <InfoIcon sx={{ fontSize: 14, color: "text.secondary" }} />
+                  </Box>
+                </Tooltip>
+              </TableCell>
+              <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
+                {result.stage_a.p.toFixed(2)}
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <TableContainer sx={{ mb: 2 }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Hold</TableCell>
+              <TableCell>Type</TableCell>
+              <TableCell>delta (s)</TableCell>
+              <TableCell>S_min</TableCell>
+              <TableCell>v_up</TableCell>
+              <TableCell>Eff. Lag (s)</TableCell>
+              <TableCell>R\u00B2</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {result.stage_a.per_hold.map((ph) => (
+              <TableRow key={ph.hold_id}>
+                <TableCell>#{ph.hold_id}</TableCell>
+                <TableCell>{ph.hold_type}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{ph.delta.toFixed(2)}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{ph.s_min.toFixed(1)}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{ph.v_up.toFixed(3)}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{ph.eff_lag.toFixed(1)}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{ph.r_squared.toFixed(4)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      {/* Stage B summary */}
+      <Typography variant="subtitle2" sx={{ mb: 1, color: "text.secondary" }}>
+        Stage B: Apnea Physiology
+      </Typography>
+      <TableContainer sx={{ mb: 2 }}>
+        <Table size="small">
+          <TableBody>
+            <TableRow>
+              <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
+                <Tooltip title={PARAM_DESCRIPTIONS["k_co2"] ?? "CO2 accumulation rate"} arrow>
+                  <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
+                    k_co2 (mmHg/s) <InfoIcon sx={{ fontSize: 14, color: "text.secondary" }} />
+                  </Box>
+                </Tooltip>
+              </TableCell>
+              <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
+                {result.stage_b.k_co2.toFixed(4)}
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, border: "none", py: 0.5 }}>
+                <Tooltip title={PARAM_DESCRIPTIONS["gamma"] ?? "ODC steepness"} arrow>
+                  <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
+                    gamma <InfoIcon sx={{ fontSize: 14, color: "text.secondary" }} />
+                  </Box>
+                </Tooltip>
+              </TableCell>
+              <TableCell sx={{ border: "none", fontFamily: "monospace", py: 0.5 }}>
+                {result.stage_b.gamma.toFixed(4)}
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <TableContainer sx={{ mb: 3 }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Hold</TableCell>
+              <TableCell>Type</TableCell>
+              <TableCell>tau_washout (s)</TableCell>
+              <TableCell>paco2_0 (mmHg)</TableCell>
+              <TableCell>R\u00B2</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {result.stage_b.per_hold.map((ph) => (
+              <TableRow key={ph.hold_id}>
+                <TableCell>#{ph.hold_id}</TableCell>
+                <TableCell>{ph.hold_type}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{ph.tau_washout.toFixed(2)}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{ph.paco2_0.toFixed(2)}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{ph.r_squared.toFixed(4)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -219,7 +300,7 @@ function FitResultCard({
             label="Notes (optional)"
             value={notes}
             onChange={(e) => onNotesChange(e.target.value)}
-            placeholder={`e.g., ${holdType} model from session data`}
+            placeholder="e.g., v7 two-stage model from session data"
           />
         </Grid>
         <Grid size={{ xs: 6, sm: 2.5 }}>
@@ -230,7 +311,7 @@ function FitResultCard({
             onClick={onSave}
             disabled={saving || saved}
           >
-            {saving ? <CircularProgress size={22} /> : saved ? "Saved" : `Save ${holdType}`}
+            {saving ? <CircularProgress size={22} /> : saved ? "Saved" : "Save Model"}
           </Button>
         </Grid>
         <Grid size={{ xs: 6, sm: 2.5 }}>
@@ -247,14 +328,14 @@ function FitResultCard({
       </Grid>
       {saved && (
         <Alert severity="success" sx={{ mt: 2 }}>
-          {holdType} model saved successfully!
+          v7 model saved successfully!
         </Alert>
       )}
     </Paper>
   );
 }
 
-// ── Main page ────────────────────────────────────────────────
+// -- Main page ----------------------------------------------------------------
 
 export default function UploadPage() {
   const queryClient = useQueryClient();
@@ -264,16 +345,15 @@ export default function UploadPage() {
   const [selectedSessionId, setSelectedSessionId] = useState<number | "new">("new");
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // Fit state — selected hold IDs (across all types)
-  const [selectedHoldIds, setSelectedHoldIds] = useState<number[]>([]);
-  // Local hold type overrides (tracks user tag changes that may not yet be in activeSession)
+  // Fit state
   const [holdTypeOverrides, setHoldTypeOverrides] = useState<Map<number, string>>(new Map());
   const [fitError, setFitError] = useState<string | null>(null);
-  // Results keyed by hold type
-  const [fitResults, setFitResults] = useState<Map<HoldType, FitPreviewResponse>>(new Map());
-  const [fitNotes, setFitNotes] = useState<Map<HoldType, string>>(new Map());
-  const [savedTypes, setSavedTypes] = useState<Set<HoldType>>(new Set());
+  const [fitResult, setFitResult] = useState<V7FitPreviewResponse | null>(null);
+  const [fitNotes, setFitNotes] = useState("");
+  const [saved, setSaved] = useState(false);
   const [fitting, setFitting] = useState(false);
+  const [fitProgress, setFitProgress] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Existing sessions
   const { data: sessions } = useQuery({
@@ -283,7 +363,6 @@ export default function UploadPage() {
 
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Load existing session detail
   const { data: existingSession } = useQuery({
     queryKey: ["session", selectedSessionId],
     queryFn: () => getSession(selectedSessionId as number),
@@ -293,7 +372,7 @@ export default function UploadPage() {
   const activeSession = session ?? existingSession ?? null;
 
   // Load saved model predictions for existing sessions
-  const [savedPredictions, setSavedPredictions] = useState<Map<number, FitPrediction>>(new Map());
+  const [savedPredictions, setSavedPredictions] = useState<Map<number, V7FitPrediction>>(new Map());
   const { data: allModels } = useQuery({
     queryKey: ["models"],
     queryFn: listAllModels,
@@ -305,24 +384,20 @@ export default function UploadPage() {
     const sessionHoldIds = new Set(activeSession.holds.map((h) => h.id));
 
     const fetchPredictions = async () => {
-      const predMap = new Map<number, FitPrediction>();
-      for (const holdType of ["FRC", "RV", "FL"] as const) {
-        const typeData = allModels[holdType];
-        const activeModel = typeData.versions.find((v) => v.is_active);
-        if (!activeModel) continue;
-        const modelHoldIds = activeModel.hold_ids;
-        if (!modelHoldIds.some((id) => sessionHoldIds.has(id))) continue;
+      const predMap = new Map<number, V7FitPrediction>();
+      const activeModel = allModels.versions.find((v) => v.is_active);
+      if (!activeModel) return;
+      if (!activeModel.hold_ids.some((id) => sessionHoldIds.has(id))) return;
 
-        try {
-          const predictions = await getHoldPredictions(activeModel.id);
-          for (const pred of predictions) {
-            if (sessionHoldIds.has(pred.hold_id)) {
-              predMap.set(pred.hold_id, pred);
-            }
+      try {
+        const predictions = await getHoldPredictions(activeModel.id);
+        for (const pred of predictions) {
+          if (sessionHoldIds.has(pred.hold_id)) {
+            predMap.set(pred.hold_id, pred);
           }
-        } catch {
-          // Model predictions unavailable — skip silently
         }
+      } catch {
+        // skip
       }
       setSavedPredictions(predMap);
     };
@@ -337,10 +412,9 @@ export default function UploadPage() {
       setSession(data);
       setSelectedSessionId("new");
       setUploadError(null);
-      setFitResults(new Map());
-      setSelectedHoldIds([]);
+      setFitResult(null);
       setHoldTypeOverrides(new Map());
-      setSavedTypes(new Set());
+      setSaved(false);
       queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
     onError: (err: { response?: { data?: { detail?: string } } }) => {
@@ -363,115 +437,120 @@ export default function UploadPage() {
     multiple: false,
   });
 
-  // Resolve hold type: local override takes priority over session data
   const getHoldType = useCallback(
     (hold: HoldSummary) => holdTypeOverrides.get(hold.id) ?? hold.hold_type,
     [holdTypeOverrides],
   );
 
-  // Group selected holds by type for the fit
-  const selectedByType = useMemo(() => {
-    if (!activeSession) return new Map<HoldType, number[]>();
-    const map = new Map<HoldType, number[]>();
-    for (const hold of activeSession.holds) {
-      const type = getHoldType(hold);
-      if (selectedHoldIds.includes(hold.id) && type !== "untagged") {
-        const ids = map.get(type as HoldType) ?? [];
-        ids.push(hold.id);
-        map.set(type as HoldType, ids);
-      }
-    }
-    return map;
-  }, [activeSession, selectedHoldIds, getHoldType]);
+  // Tagged (non-untagged) holds for the fit
+  const taggedHoldIds = useMemo(() => {
+    if (!activeSession) return [];
+    return activeSession.holds
+      .filter((h) => getHoldType(h) !== "untagged")
+      .map((h) => h.id);
+  }, [activeSession, getHoldType]);
 
-  // Build prediction lookup: saved model predictions as base, fresh fit results on top
+  // Build prediction lookup
   const predictionMap = useMemo(() => {
-    const map = new Map<number, FitPrediction>(savedPredictions);
-    for (const result of fitResults.values()) {
-      for (const p of result.predictions) {
+    const map = new Map<number, V7FitPrediction>(savedPredictions);
+    if (fitResult) {
+      for (const p of fitResult.predictions) {
         map.set(p.hold_id, p);
       }
     }
     return map;
-  }, [savedPredictions, fitResults]);
+  }, [savedPredictions, fitResult]);
 
   // Save mutation
   const saveMutation = useMutation({
     mutationFn: saveFit,
-    onSuccess: (_data, variables) => {
-      setSavedTypes((prev) => new Set(prev).add(variables.hold_type as HoldType));
+    onSuccess: () => {
+      setSaved(true);
       queryClient.invalidateQueries({ queryKey: ["models"] });
     },
   });
 
-  // Run fit for all selected types in parallel
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  // Run v7 fit with task polling
   const handleRunFit = async () => {
-    if (selectedByType.size === 0) return;
+    if (taggedHoldIds.length === 0) return;
     setFitError(null);
     setFitting(true);
-    setFitResults(new Map());
-    setSavedTypes(new Set());
+    setFitResult(null);
+    setSaved(false);
+    setFitProgress("Submitting fit...");
 
-    const newResults = new Map<HoldType, FitPreviewResponse>();
-    const errors: string[] = [];
+    try {
+      const { task_id } = await submitFitPreview({ hold_ids: taggedHoldIds });
+      setFitProgress("Fitting (this may take a few minutes)...");
 
-    await Promise.all(
-      Array.from(selectedByType.entries()).map(async ([holdType, holdIds]) => {
+      // Poll for completion
+      pollRef.current = setInterval(async () => {
         try {
-          const result = await previewFit({ hold_type: holdType, hold_ids: holdIds });
-          newResults.set(holdType, result);
+          const status = await pollFitTask(task_id);
+          if (status.status === "completed" && status.result) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            pollRef.current = null;
+            setFitResult(status.result);
+            setFitting(false);
+            setFitProgress(null);
+          } else if (status.status === "failed") {
+            if (pollRef.current) clearInterval(pollRef.current);
+            pollRef.current = null;
+            setFitError(status.error ?? "Fit failed");
+            setFitting(false);
+            setFitProgress(null);
+          }
         } catch (err: any) {
-          errors.push(`${holdType}: ${err.response?.data?.detail ?? "Fit failed"}`);
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setFitError(err.response?.data?.detail ?? "Polling failed");
+          setFitting(false);
+          setFitProgress(null);
         }
-      }),
-    );
-
-    setFitResults(newResults);
-    if (errors.length > 0) setFitError(errors.join("; "));
-    setFitting(false);
+      }, 3000);
+    } catch (err: any) {
+      setFitError(err.response?.data?.detail ?? "Failed to submit fit");
+      setFitting(false);
+      setFitProgress(null);
+    }
   };
 
-  const handleSave = (holdType: HoldType) => {
-    const result = fitResults.get(holdType);
-    if (!result) return;
-    const holdIds = selectedByType.get(holdType) ?? [];
+  const handleSave = () => {
+    if (!fitResult) return;
     saveMutation.mutate({
-      hold_type: holdType,
-      params: result.params,
-      hold_ids: holdIds,
-      r_squared: result.r_squared,
-      objective_val: result.objective_val,
-      converged: result.converged,
-      notes: fitNotes.get(holdType) || undefined,
+      stage_a: fitResult.stage_a,
+      stage_b: fitResult.stage_b,
+      predictions: fitResult.predictions,
+      overall_r2: fitResult.overall_r2,
+      hold_ids: fitResult.hold_ids,
+      s_base_values: {},  // Server-side already has these
+      frozen_sensor: {},  // Server-side already has these
+      notes: fitNotes || undefined,
       set_active: true,
     });
   };
 
-  const handleDiscard = (holdType: HoldType) => {
-    setFitResults((prev) => {
-      const next = new Map(prev);
-      next.delete(holdType);
-      return next;
-    });
-  };
-
-  const handleSaveAll = () => {
-    for (const holdType of fitResults.keys()) {
-      if (!savedTypes.has(holdType)) handleSave(holdType);
-    }
+  const handleDiscard = () => {
+    setFitResult(null);
+    setFitNotes("");
   };
 
   const handleSelectExistingSession = useCallback((id: number | "new") => {
     setSelectedSessionId(id);
     setSession(null);
-    setFitResults(new Map());
-    setSelectedHoldIds([]);
+    setFitResult(null);
     setHoldTypeOverrides(new Map());
-    setSavedTypes(new Set());
+    setSaved(false);
     setSavedPredictions(new Map());
   }, []);
 
-  // Auto-select session from URL query param (e.g., /upload?session=123)
   useEffect(() => {
     const sessionParam = searchParams.get("session");
     if (sessionParam && sessions) {
@@ -483,16 +562,14 @@ export default function UploadPage() {
     }
   }, [searchParams, sessions, handleSelectExistingSession, setSearchParams]);
 
-  // Delete session mutation
   const deleteMutation = useMutation({
     mutationFn: deleteSession,
     onSuccess: () => {
       setSession(null);
       setSelectedSessionId("new");
-      setFitResults(new Map());
-      setSelectedHoldIds([]);
+      setFitResult(null);
       setHoldTypeOverrides(new Map());
-      setSavedTypes(new Set());
+      setSaved(false);
       queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -506,12 +583,7 @@ export default function UploadPage() {
     deleteMutation.mutate(id);
   };
 
-  // Summary of selected types
-  const selectedTypeSummary = useMemo(() => {
-    return Array.from(selectedByType.entries())
-      .map(([type, ids]) => `${ids.length} ${type}`)
-      .join(", ");
-  }, [selectedByType]);
+  const taggedCount = taggedHoldIds.length;
 
   return (
     <Box sx={{ pb: activeSession ? 10 : 0 }}>
@@ -519,10 +591,10 @@ export default function UploadPage() {
         Upload & Fit
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-        Upload a CSV, tag holds, select them, and fit models for all selected types at once.
+        Upload a CSV, tag holds, and fit the v7 two-stage model across all tagged holds simultaneously.
       </Typography>
 
-      {/* ── Section 1: Upload / Select Session ─────────────────── */}
+      {/* Section 1: Upload / Select Session */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1 }}>
           <UploadIcon fontSize="small" />
@@ -543,7 +615,7 @@ export default function UploadPage() {
                 </MenuItem>
                 {sessions?.map((s) => (
                   <MenuItem key={s.id} value={s.id}>
-                    {s.name} ({s.session_date}) — {s.n_holds} holds
+                    {s.name} ({s.session_date}) - {s.n_holds} holds
                   </MenuItem>
                 ))}
               </Select>
@@ -594,7 +666,7 @@ export default function UploadPage() {
         )}
       </Paper>
 
-      {/* ── Section 2: Holds — Tag & Select ────────────────────── */}
+      {/* Section 2: Holds */}
       {activeSession && (
         <>
           <Paper sx={{ p: 3, mb: 3 }}>
@@ -602,16 +674,16 @@ export default function UploadPage() {
               <Box>
                 <Typography variant="h6" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                   <FitIcon fontSize="small" />
-                  Holds — {activeSession.name}
+                  Holds - {activeSession.name}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Tag holds to select them for fitting. Fit all selected types at once.
+                  Tag holds with their type (FRC/RV/FL). All tagged holds are fitted together.
                 </Typography>
               </Box>
               <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
                 <Chip label={activeSession.session_date} size="small" />
                 <Chip label={`${activeSession.holds.length} holds`} size="small" color="primary" />
-                <Tooltip title="Delete this session and re-upload the CSV. Useful when data processing has been updated and you want to re-import with the latest corrections applied.">
+                <Tooltip title="Delete this session and re-upload the CSV.">
                   <Button
                     size="small"
                     color="error"
@@ -632,58 +704,38 @@ export default function UploadPage() {
               </Alert>
             )}
 
-            {/* Hold cards */}
+            {fitting && fitProgress && (
+              <Box sx={{ mb: 2 }}>
+                <Alert severity="info" sx={{ mb: 1 }}>
+                  {fitProgress}
+                </Alert>
+                <LinearProgress />
+              </Box>
+            )}
+
             {activeSession.holds.map((hold) => (
-                <HoldCard
-                  key={hold.id}
-                  hold={hold}
-                  prediction={predictionMap.get(hold.id)}
-                  onTagChange={(holdId, newType) => {
-                    // Track the type change locally for immediate reactivity
-                    setHoldTypeOverrides((prev) => new Map(prev).set(holdId, newType));
-                    if (newType !== "untagged") {
-                      // Auto-select when tagged
-                      setSelectedHoldIds((prev) =>
-                        prev.includes(holdId) ? prev : [...prev, holdId],
-                      );
-                    } else {
-                      // Auto-deselect when untagged
-                      setSelectedHoldIds((prev) => prev.filter((id) => id !== holdId));
-                    }
-                  }}
-                />
+              <HoldCard
+                key={hold.id}
+                hold={hold}
+                prediction={predictionMap.get(hold.id)}
+                onTagChange={(holdId, newType) => {
+                  setHoldTypeOverrides((prev) => new Map(prev).set(holdId, newType));
+                }}
+              />
             ))}
           </Paper>
 
-          {/* ── Section 3: Fit Results & Save ──────────────────── */}
-          {fitResults.size > 0 && (
-            <>
-              {fitResults.size > 1 && (
-                <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
-                  <Button
-                    variant="contained"
-                    color="success"
-                    onClick={handleSaveAll}
-                    disabled={savedTypes.size === fitResults.size || saveMutation.isPending}
-                  >
-                    Save All Models
-                  </Button>
-                </Box>
-              )}
-              {FIT_HOLD_TYPES.filter((t) => fitResults.has(t)).map((holdType) => (
-                <FitResultCard
-                  key={holdType}
-                  holdType={holdType}
-                  result={fitResults.get(holdType)!}
-                  notes={fitNotes.get(holdType) ?? ""}
-                  onNotesChange={(v) => setFitNotes((prev) => new Map(prev).set(holdType, v))}
-                  onSave={() => handleSave(holdType)}
-                  onDiscard={() => handleDiscard(holdType)}
-                  saving={saveMutation.isPending && saveMutation.variables?.hold_type === holdType}
-                  saved={savedTypes.has(holdType)}
-                />
-              ))}
-            </>
+          {/* Section 3: Fit Results */}
+          {fitResult && (
+            <V7FitResultCard
+              result={fitResult}
+              notes={fitNotes}
+              onNotesChange={setFitNotes}
+              onSave={handleSave}
+              onDiscard={handleDiscard}
+              saving={saveMutation.isPending}
+              saved={saved}
+            />
           )}
         </>
       )}
@@ -709,19 +761,19 @@ export default function UploadPage() {
           }}
         >
           <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
-            {selectedHoldIds.length === 0
-              ? "No holds selected \u2014 tag holds to include them in the fit"
-              : `Selected: ${selectedTypeSummary}`}
+            {taggedCount === 0
+              ? "No holds tagged - tag holds to include them in the fit"
+              : `${taggedCount} hold${taggedCount !== 1 ? "s" : ""} tagged for fitting`}
           </Typography>
 
           <Button
             variant="contained"
             onClick={handleRunFit}
-            disabled={selectedByType.size === 0 || fitting}
+            disabled={taggedCount === 0 || fitting}
             startIcon={fitting ? <CircularProgress size={18} /> : <FitIcon />}
             sx={{ minWidth: 120 }}
           >
-            {fitting ? "Fitting..." : `Fit ${selectedByType.size > 1 ? `${selectedByType.size} Types` : "Model"}`}
+            {fitting ? "Fitting..." : "Fit Model"}
           </Button>
         </Paper>
       )}

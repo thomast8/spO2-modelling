@@ -1,4 +1,4 @@
-"""Model version management and database seeding."""
+"""Model version management for v7 two-stage models."""
 
 import json
 
@@ -6,21 +6,21 @@ from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.db_models import FitBounds, ModelVersion
-from app.services.fitter import DEFAULT_BOUNDS
-from app.services.hill_model import ApneaModelParams
+from app.models.db_models import FitBounds, ModelVersionV7
+from app.services.v7_model import PERHOLD_BOUNDS, V7ModelParams
 
 
 async def seed_default_bounds(db: AsyncSession) -> None:
-    """Seed default fit bounds, replacing any stale entries from old schema."""
+    """Seed default v7 fit bounds, replacing any stale entries."""
     from sqlalchemy import delete
 
-    # Bulk delete all existing bounds first (handles stale param names)
     await db.execute(delete(FitBounds))
     await db.flush()
 
-    for hold_type, bounds in DEFAULT_BOUNDS.items():
-        for param_name, (lower, upper) in bounds.items():
+    # v7 uses per-hold-type bounds for tau_washout and paco2_0
+    param_names = ["tau_washout", "paco2_0"]
+    for hold_type, bounds_list in PERHOLD_BOUNDS.items():
+        for param_name, (lower, upper) in zip(param_names, bounds_list):
             db.add(FitBounds(
                 hold_type=hold_type,
                 param_name=param_name,
@@ -29,7 +29,7 @@ async def seed_default_bounds(db: AsyncSession) -> None:
             ))
 
     await db.flush()
-    logger.info(f"Seeded default fit bounds for {list(DEFAULT_BOUNDS.keys())}")
+    logger.info(f"Seeded v7 fit bounds for {list(PERHOLD_BOUNDS.keys())}")
 
 
 async def get_bounds_for_type(db: AsyncSession, hold_type: str) -> dict[str, tuple[float, float]]:
@@ -40,99 +40,83 @@ async def get_bounds_for_type(db: AsyncSession, hold_type: str) -> dict[str, tup
     rows = result.scalars().all()
 
     if not rows:
-        # Fall back to defaults
-        return DEFAULT_BOUNDS.get(hold_type, DEFAULT_BOUNDS["FL"])
+        bounds_list = PERHOLD_BOUNDS.get(hold_type, PERHOLD_BOUNDS["FL"])
+        return dict(zip(["tau_washout", "paco2_0"], bounds_list))
 
     return {row.param_name: (row.lower, row.upper) for row in rows}
 
 
-async def get_next_version(db: AsyncSession, hold_type: str) -> int:
-    """Get the next version number for a hold type."""
+async def get_next_version_v7(db: AsyncSession) -> int:
+    """Get the next global version number for v7 models."""
     max_version = await db.scalar(
-        select(func.max(ModelVersion.version)).where(ModelVersion.hold_type == hold_type)
+        select(func.max(ModelVersionV7.version))
     )
     return (max_version or 0) + 1
 
 
-async def save_model_version(
+async def save_model_version_v7(
     db: AsyncSession,
-    hold_type: str,
-    params: ApneaModelParams,
+    params: V7ModelParams,
     r_squared: float,
     objective_val: float,
     converged: bool,
     hold_ids: list[int],
+    stage_a_diagnostics: dict,
+    stage_b_diagnostics: dict,
     notes: str | None = None,
     set_active: bool = True,
-) -> ModelVersion:
-    """Save a new model version to the database.
+) -> ModelVersionV7:
+    """Save a new v7 model version to the database."""
+    version = await get_next_version_v7(db)
 
-    Args:
-        db: Database session
-        hold_type: FRC, RV, or FL
-        params: Fitted model parameters
-        r_squared: Overall R-squared
-        objective_val: Optimization objective value
-        converged: Whether optimizer converged
-        hold_ids: IDs of holds used in fit
-        notes: Optional notes
-        set_active: Whether to set this as the active version
-
-    Returns:
-        The created ModelVersion record
-    """
-    version = await get_next_version(db, hold_type)
-
-    # Deactivate current active version if setting new one
     if set_active:
         result = await db.execute(
-            select(ModelVersion).where(
-                ModelVersion.hold_type == hold_type,
-                ModelVersion.is_active == True,  # noqa: E712
+            select(ModelVersionV7).where(
+                ModelVersionV7.is_active == True,  # noqa: E712
             )
         )
         for existing in result.scalars().all():
             existing.is_active = False
 
-    model = ModelVersion(
-        hold_type=hold_type,
+    params_dict = params.to_dict()
+
+    model = ModelVersionV7(
         version=version,
         is_active=set_active,
-        pao2_0=params.pao2_0,
-        pvo2=params.pvo2,
-        tau_washout=params.tau_washout,
-        gamma=params.gamma,
-        bohr_max=params.bohr_max,
-        tau_bohr=params.tau_bohr,
-        r_offset=params.r_offset,
+        stage_a_params_json=json.dumps({
+            "stage_a_global": params_dict["stage_a_global"],
+            "stage_a_per_hold": params_dict["stage_a_per_hold"],
+            "s_base_values": params_dict["s_base_values"],
+        }),
+        stage_b_params_json=json.dumps({
+            "stage_b_global": params_dict["stage_b_global"],
+            "stage_b_per_hold": params_dict["stage_b_per_hold"],
+            "s_base_values": params_dict["s_base_values"],
+        }),
+        stage_a_diagnostics_json=json.dumps(stage_a_diagnostics),
+        stage_b_diagnostics_json=json.dumps(stage_b_diagnostics),
+        hold_ids_json=json.dumps(hold_ids),
         r_squared=r_squared,
         objective_val=objective_val,
         converged=converged,
-        n_holds_used=len(hold_ids),
-        hold_ids_json=json.dumps(hold_ids),
         notes=notes,
     )
     db.add(model)
     await db.flush()
 
-    logger.info(
-        f"Saved {hold_type} model v{version} "
-        f"(R²={r_squared:.4f}, active={set_active})"
-    )
+    logger.info(f"Saved v7 model v{version} (R2={r_squared:.4f}, active={set_active})")
     return model
 
 
-async def activate_model(db: AsyncSession, model_id: int) -> ModelVersion:
-    """Set a model version as active, deactivating others of the same type."""
-    model = await db.get(ModelVersion, model_id)
+async def activate_model_v7(db: AsyncSession, model_id: int) -> ModelVersionV7:
+    """Set a v7 model version as active, deactivating all others."""
+    model = await db.get(ModelVersionV7, model_id)
     if not model:
         raise ValueError(f"Model version {model_id} not found")
 
-    # Deactivate others
     result = await db.execute(
-        select(ModelVersion).where(
-            ModelVersion.hold_type == model.hold_type,
-            ModelVersion.is_active == True,  # noqa: E712
+        select(ModelVersionV7).where(
+            ModelVersionV7.is_active == True,  # noqa: E712
         )
     )
     for existing in result.scalars().all():
@@ -141,26 +125,23 @@ async def activate_model(db: AsyncSession, model_id: int) -> ModelVersion:
     model.is_active = True
     await db.flush()
 
-    logger.info(f"Activated {model.hold_type} model v{model.version}")
+    logger.info(f"Activated v7 model v{model.version}")
     return model
 
 
-async def get_active_model(db: AsyncSession, hold_type: str) -> ModelVersion | None:
-    """Get the active model version for a hold type."""
+async def get_active_model_v7(db: AsyncSession) -> ModelVersionV7 | None:
+    """Get the active v7 model version."""
     result = await db.execute(
-        select(ModelVersion).where(
-            ModelVersion.hold_type == hold_type,
-            ModelVersion.is_active == True,  # noqa: E712
+        select(ModelVersionV7).where(
+            ModelVersionV7.is_active == True,  # noqa: E712
         )
     )
     return result.scalar_one_or_none()
 
 
-async def get_model_versions(db: AsyncSession, hold_type: str) -> list[ModelVersion]:
-    """Get all model versions for a hold type, ordered by version desc."""
+async def get_model_versions_v7(db: AsyncSession) -> list[ModelVersionV7]:
+    """Get all v7 model versions, ordered by version desc."""
     result = await db.execute(
-        select(ModelVersion)
-        .where(ModelVersion.hold_type == hold_type)
-        .order_by(ModelVersion.version.desc())
+        select(ModelVersionV7).order_by(ModelVersionV7.version.desc())
     )
     return list(result.scalars().all())
