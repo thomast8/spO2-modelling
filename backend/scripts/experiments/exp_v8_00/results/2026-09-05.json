@@ -1,0 +1,66 @@
+{
+ "group": "2026-09-05",
+ "n_holds": 2,
+ "n_points": 685,
+ "excluded": {},
+ "stage_a": {
+  "converged": true,
+  "loss": 1383.518396082715,
+  "tau_0": 6.552903869332663,
+  "p": 4.535456773402773,
+  "tau_0_at_bound": false,
+  "p_at_bound": false
+ },
+ "stage_b": {
+  "converged": true,
+  "loss": 1639.5610777771547,
+  "k_co2": 0.09961173065057573,
+  "gamma": 2.426045023050261,
+  "k_co2_at_bound": false,
+  "gamma_at_bound": false
+ },
+ "holds": [
+  {
+   "id": "2026-09-05-FL1",
+   "type": "FL",
+   "duration": 301.0,
+   "nadir_obs": 81.0,
+   "s_base": 97.45454545454545,
+   "delta": -1.5529038734199352,
+   "eff_lag": 5.0,
+   "S_min": 97.26635920662483,
+   "v_up": 2.824041753138123,
+   "r2a_stage_a": -0.048527397217966506,
+   "r2n_stage_a": -0.3474835159216816,
+   "tau_washout": 380.7687386937991,
+   "tau_washout_at_bound": false,
+   "paco2_0": 46.513550395378644,
+   "paco2_0_at_bound": false,
+   "r2a_stage_b": 0.9408314057209367,
+   "r2n_stage_b": 0.8268533671725337,
+   "nadir_err_stage_b": 4.0,
+   "nadir_spo2_err_stage_b": -0.09678276923294504
+  },
+  {
+   "id": "2026-09-05-FL2",
+   "type": "FL",
+   "duration": 332.0,
+   "nadir_obs": 71.0,
+   "s_base": 99.0,
+   "delta": 1.5524204345253878,
+   "eff_lag": 8.105324303858051,
+   "S_min": 71.29134897840251,
+   "v_up": 0.005393720651945877,
+   "r2a_stage_a": 0.9760061888177498,
+   "r2n_stage_a": 0.9847996176292987,
+   "tau_washout": 380.9564882269881,
+   "tau_washout_at_bound": false,
+   "paco2_0": 46.66543031401971,
+   "paco2_0_at_bound": false,
+   "r2a_stage_b": 0.9678063129115586,
+   "r2n_stage_b": 0.9775714121166308,
+   "nadir_err_stage_b": 1.0,
+   "nadir_spo2_err_stage_b": -1.5853177331619008
+  }
+ ]
+}
