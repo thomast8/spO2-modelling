@@ -27,8 +27,9 @@ The export does not record which oximeter a session used (Nadir #439 is open). I
 carry one piece of provenance: sessions tagged `imported, stamina` were rebuilt from a
 STAmina export, so STAmina and the Masimo recorded them, and their lung-volume label is
 the importer's default (`full`, `StaminaImport.kind(for:)`), not what the diver did. The
-other sessions were recorded by the app on its connected oximeter, presumably the Medisana
-PM100.
+other sessions were recorded by the app on its connected oximeter; Thomas confirmed on
+17 October that this was the Medisana PM100 (finger) for every app session from
+2 September onwards. So: Masimo MightySat in February and August, PM100 from September.
 
 The handoff for this work assumed "months of recorded holds". The export has:
 
@@ -147,9 +148,12 @@ one, and that is the point: the same code on the same session through a second l
   - The 6 August "full" holds are not full-lung holds. Eight holds of 65 to 138 s reach
     58 % SpO2, which is RV behaviour (the 16 October RV table reaches 42 % at 159 s; the
     September full-lung holds need 300 s to reach 80 %). The label is the STAmina
-    importer's default. The session's own lung volumes are unknown, so its fit is kept as
-    a labelled example of what v7 does when the type bounds are wrong, not as evidence
-    about full-lung physiology.
+    importer's default. Read from the traces: holds 1 to 8 drop below 95 % at 66 to 74 s
+    into the hold, where the PM100 RV tables do at 59 to 72 s and February's two FRC holds
+    at 106 s, so they are exhale holds and most likely RV; hold 9 (321 s, below 95 % at
+    200 s, nadir 79 %) is a full-lung hold like the 8 August ones. Until Thomas confirms,
+    the session is fitted with the importer's labels and kept as a labelled example of what
+    v7 does when the type bounds are wrong, not as evidence about full-lung physiology.
   - The 2 October session ("True tidal breathing") alternates an RV hold with a full-lung
     hold seven seconds later, with no recovery between them. The full-lung holds start at
     79 to 89 % with the reading still falling from the RV hold before, so their apnea-
@@ -166,10 +170,11 @@ one, and that is the point: the same code on the same session through a second l
     2026-09-05-FL1, 10 s after FL2 the same evening, 29 s after 2026-09-02-FL1. v7's
     per-hold delta_h existed for this; the spread here (-16 to +20 s, see below) is far
     wider than February's (-8 to +7 s).
-  - Readings hold flat for 10 to 20 s after the end of a hold, then step. The app-recorded
-    traces behave differently from the MightySat ones around the nadir. This is the
-    device-specific sensor model the handoff asks for, and with the device unrecorded it
-    cannot be separated from the finger, the diver's movement or the app's sampling.
+  - Readings hold flat for 10 to 20 s after the end of a hold, then step. The PM100 traces
+    behave differently from the MightySat ones around the nadir. This is the
+    device-specific sensor model the handoff asks for. With the device now known, what is
+    still not separable from it is the finger, the diver's movement and the app's sampling,
+    which only a paired recording would settle.
   - The 8 September session is a CO2 table (five 150 s holds). SpO2 barely moves in four
     of them and v7's QC drops them. CO2 tables are not desaturation data.
   - RV is now the best-covered lung volume: 18 app-recorded RV holds in four sessions, 60
@@ -280,9 +285,10 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
      at a value for 10 to 20 s and then step 5 to 13 points, in every RV table and after
      most holds where the trace continues (results/2026-10-16.png shows six in a row). A gamma kernel smooths; it
      cannot hold and step. The inflated lags are Stage A stretching the kernel to cover a
-     staircase. This is the per-device sensor model the handoff asks for, and with the
-     device unrecorded it cannot be attributed to the oximeter rather than the finger,
-     the diver's movement or the app's sampling.
+     staircase. This is the per-device sensor model the handoff asks for. The device is
+     the PM100 on every app session (Thomas, 17 October); whether the staircase is the
+     PM100's own averaging, the finger, the diver's movement or the app's 1 Hz sampling
+     needs a recording with two sensors on at once.
 
   5. Stage A is fragile. With two holds per session it put 2026-09-05-FL1 at S_min 97 %,
      v_up 2.8 %/s and lag at the floor (R2a -0.05) while Stage B fits the same hold at
@@ -343,20 +349,22 @@ that exists in the data, not a hierarchical physiology model.
 6. DATA NEEDED BEFORE V8 WORK CAN START
 ---------------------------------------
 
-The fresh export answered the first request. What is still missing, in order:
+The fresh export answered the first request, and Thomas confirmed the device: the PM100
+recorded every app session from 2 September onwards, the Masimo everything before. What
+is still missing, in order:
 
-  1. Which oximeter recorded the app sessions (2 September onwards). The export does not
-     say. The STAmina imports are Masimo by construction; the rest are presumably the
-     PM100. If any app session used another device, nothing above can be interpreted.
-  2. What lung volume the 6 August holds really were. The importer labelled them full;
-     the traces say exhale. A one-line answer fixes nine holds.
-  3. FRC holds, or confirmation that FRC is not part of the training. v7's structure
+  1. What lung volume the 6 August holds really were. The importer labelled them full;
+     the traces say holds 1 to 8 are exhale (RV by onset timing) and hold 9 full. A
+     one-line confirmation fixes nine holds and, if they were FRC, adds the first FRC data.
+  2. FRC holds, or confirmation that FRC is not part of the training. v7's structure
      depends on FRC; v8 needs at least one lung-volume contrast besides full vs RV, and
      the packed holds (three so far) are the other candidate.
-  4. The post-last-hold cooldown on, so the nadir of the max holds is in the trace. The
+  3. The post-last-hold cooldown on, so the nadir of the max holds is in the trace. The
      12 October 345 s hold has 7 s after it.
-  5. Any measured lung volumes (FVC from Health, lab TLC/RV) and body mass, for the
+  4. Any measured lung volumes (FVC from Health, lab TLC/RV) and body mass, for the
      mechanistic model's inputs. Not needed for the baseline, needed before v8.
+  5. For the sensor model: one session with the PM100 and the MightySat on at the same
+     time, so the staircase can be attributed to a device rather than to the finger.
 
 Nothing here changes the framing rule: whatever comes next is retrospective and
 descriptive. It reconstructs what happened; it never says how long a hold can go.
