@@ -1,0 +1,215 @@
+v8.01 Results: what the two oximeters do to a hold, without ground truth
+========================================================================
+
+Date: 2026-10-17
+Script:  backend/scripts/experiments/exp_v8_01/exp_v8_01_sensor.py
+Outputs: backend/scripts/experiments/exp_v8_01/results/tables.txt   (every table in full)
+         results/lag_measures.json, results/posthold_fit.json, results/posthold-<device>.png
+Depends on the exp_v8_00 loader (nadir_export.py) and its QC and label override.
+
+Question: the v8 handoff asks for a sensor model per device. v8.00 found that v7's "sensor
+lag" absorbed whatever the latent template could not make, and that the PM100 traces looked
+different from the Masimo ones around the nadir. This experiment asks what, exactly, differs
+between the two oximeters in these recordings, and what of a sensor model is identifiable
+when no trace has an arterial reference.
+
+Devices: Masimo MightySat (finger) via STAmina on 21 February and 6 and 8 August 2026;
+Medisana PM100 (finger) via Nadir from 2 September 2026 on (Thomas, 17 October). One device
+per period, so device, month, finger and training phase are confounded throughout.
+
+What Nadir and BluetoothEngine keep of a PM100 reading, from the code: BluetoothEngine's
+PLXSParser decodes the base SpO2 and pulse rate of the PLX Continuous Measurement and skips
+the optional SpO2PR-Fast and SpO2PR-Slow fields if the device sends them; it maps the Device
+and Sensor Status bits to a contact flag and a quality (`good`, `lowPerfusion`, `searching`,
+`noContact`). Nadir's `VitalsRecorder.sample(from:)` keeps SpO2, heart rate, RR intervals and
+the contact flag, and drops the quality. Each BLE notification becomes one sample; the
+timestamps are the engine's. So a "low perfusion" reading is indistinguishable from a good
+one in the export, and whether the PM100 reports an averaged or a fast SpO2 is not knowable
+from the recordings.
+
+
+1. TRACE STATISTICS (table A in results/tables.txt)
+---------------------------------------------------
+
+Both devices report integers that sit still for seconds at a time.
+
+  device  kind      samples  run median  run p90  runs>=10s  |step| median  max
+  masimo  hold         2881           4       24       0.23              1    6
+  masimo  other        3085           2       15       0.15              1   10
+  pm100   activity     3826           5       29       0.30              1   16
+  pm100   hold         6279           3       16       0.18              1   27
+  pm100   other        6824           3       21       0.21              1   55
+
+Freeze-then-jump events, two definitions, per 1000 samples; how many had a no-contact
+sample or a missing second in the run or the three seconds after it; and how many began
+while the trace was moving (0.1 %/s or more over the previous 30 s):
+
+  device  kind       8 s run then >= 3 pts                5 s run then >= 2 pts
+                     events  per 1000  near loss  moving   events  per 1000  near loss  moving
+  masimo  hold            3       1.0       3        0          9       3.1       7        2
+  masimo  other           4       1.3       0        4          8       2.6       0        7
+  pm100   activity       17       4.4      12       10         44      11.5      30       23
+  pm100   hold            6       1.0       5        2         21       3.3       7       13
+  pm100   other           8       1.2       3        7         30       4.4       7       22
+
+Inside holds the rate is the same on both devices: 1.0 freeze-jump per 1000 s on the stricter
+rule, 3.1 against 3.3 on the looser. The context differs: on the looser rule 13 of the 21
+PM100 freezes in holds began mid-descent against 2 of the 9 Masimo ones (2 of 6 against 0 of
+3 on the stricter), which is the plateau-then-drop impression v8.00 took from the plots, on
+counts too small to lean on. The PM100's jumps are also larger (up to 27 points inside a
+hold, 55 outside, against 6 and 10). Its freezes in activity wear (sleep and daytime) run at
+four times its own rate in holds and go with contact loss; the Masimo never recorded
+activity, so there is no counterpart. The plateau-and-step look of the RV tables in v8.00's
+plots is integer oximetry of a slow signal on both devices, not a PM100 trait; v8.00's
+write-up was corrected to say so before this file was written.
+
+
+2. FREEZE MASK (table B)
+------------------------
+
+A later fit should treat a frozen run as missing rather than as a plateau in SaO2. With the
+stricter rule (a run of 8 s or more followed by a step of 3 or more; the run is masked):
+
+  masimo    14 QC-passing holds,  2951 s of trace,  34 s masked (1.2 %), 4 holds touched
+  pm100     26 QC-passing holds,  5436 s of trace,  68 s masked (1.3 %), 6 holds touched
+
+`freeze_mask(t, spo2)` in the script is the rule. It removes about one second in eighty on
+either device, so it changes no conclusion in v8.00; it is there so the next fit does not
+have to argue about plateaus.
+
+
+3. MODEL-FREE LAG MEASURES (table C)
+------------------------------------
+
+For every QC-passing hold with at least 15 s of trace after it: nadir delay (seconds from
+the end of the hold to the lowest reading) and onset (seconds from the end of the hold until
+the reading has risen two points above its lowest-so-far). Medians with 95 % bootstrap
+intervals over holds:
+
+  group                   n   nadir delay (s)      onset (s)
+  masimo, all            13   23 [19, 27]          29 [25, 37]   n=13
+  pm100, all             24   24 [16, 31]          37 [35, 42]   n=20
+  masimo, FL              3   29 [23, 31]          37 [29, 38]   n=3
+  pm100, FL               6   21 [ 6, 26]          36 [27, 39]   n=4
+  masimo, RV              8   20 [16, 25]          26 [22, 31]   n=8
+  pm100, RV              18   26 [16, 34]          38 [35, 47]   n=16
+  masimo, RV, 90-140 s    6   20 [14, 25]          27 [19, 32]   n=6
+  pm100, RV, 90-140 s    13   27 [16, 39]          37 [35, 47]   n=11
+
+Four PM100 holds have no onset because the trace ends first (4 September FL5 and 5 September
+FL2 at 20 s, 2 October RV7 and RV9 at 23 and 19 s); they count in the nadir-delay medians
+and not in the onset medians, so the PM100 onset medians are biased short, which works
+against the difference below, not for it.
+
+RV is the one lung volume both devices recorded in numbers (full-lung: 3 Masimo holds
+against 6 PM100, too thin to compare). Within RV at matched hold length the onset of the
+recovery rise comes about ten seconds later on the PM100 (37 against 27 s) with
+non-overlapping intervals, while the nadir delay differs by seven seconds with overlapping
+ones. The PM100's nadir delay also spreads far wider (1 to 47 s against 10 to 35 s); the
+widest values are one session (12 October, 39 to 47 s).
+
+Nadir delay against the slope over the last 30 s of the hold: a pure delay gives the same
+nadir delay whatever the slope, a low-pass does not. Pearson r is +0.08 on the Masimo
+(13 holds) and -0.35 on the PM100 (24 holds), but leaving one session out moves the PM100
+value between -0.58 and -0.02, and it is -0.02 without 12 October. One session carries it,
+so nothing is claimed about kernel form.
+
+Heart rate as a covariate: onset = 32 s + 8 s if PM100 + 4 s per %/s of end slope, residual
+sd 9 s, and the residual's correlation with end-of-hold heart rate is r = -0.22 over 33
+holds. Reported, not modelled: with 13 and 20 holds and the sign of simpler correlations
+flipping between devices, there is no HR-dependent lag to put in a model.
+
+
+4. POST-HOLD SENSOR FIT (table D)
+---------------------------------
+
+One small parametric fit per device on the holds with at least 45 s of trace after the end
+(Masimo 4, PM100 11), window the last 30 s of the hold plus the recovery. Latent: the
+end-of-hold descent continues for T seconds, sits on a floor for P seconds, then rises
+exponentially to the pre-hold baseline with a per-hold time constant tau_r. Sensor: a
+first-order low-pass with time constant tau_s. T, P and tau_s shared per device, bootstrapped
+over holds (200 resamples); tau_s profiled on a grid.
+
+  device   n   T (s)              P (s)              tau_s (s)          tau_r median  RMSE
+  masimo   4   13.8 [ 9.1, 27.9]  23.6 [ 5.9, 36.2]   2.7 [0.5, 2.8]      7.7 s       4.56
+  pm100   11   16.8 [ 9.5, 34.2]  21.8 [ 0.0, 33.8]   3.2 [1.2, 4.8]     20.1 s       5.37
+
+  The Masimo row rests on four holds; its intervals are bootstrap resamples of four.
+
+  tau_s profile, RMSE at fixed tau_s:
+  masimo   1s 4.64   2s 4.59   4s 4.63   8s 5.45   12s 6.54   16s 7.61   24s 9.59   32s 11.15
+  pm100    1s 5.41   2s 5.38   4s 5.37   8s 5.56   12s 5.91   16s 6.48   24s 7.79   32s  8.95
+
+What this fit suggests: within this latent form the sensor's own smoothing is short. The
+profile is flat below 4 s and the fit is worse at every tau_s above 8 s on both devices. A
+profile under a model that does not fit is not a bound, so this is suggested, not
+established. What it cannot say: T and P separately. Their
+intervals span 9 to 34 s and 0 to 36 s and move against each other; only their sum, the
+onset of the rise (about 37 s here), is pinned, and section 3 measures that directly. The
+first version of this fit, without the floor, drew a V through every recovery and scored
+RMSE 5.4; adding the floor helped the Masimo holds and not the PM100 ones. The plots in
+results/posthold-*.png show why: holds differ in when the fall stops and when the rise
+begins by 20 to 30 s, and one shared T and P per device cannot follow that. An RMSE of 4.6
+to 5.4 points on a signal quantised to 1 is a model that does not fit, and it is reported
+as one.
+
+
+5. WHAT WAS AND WAS NOT IDENTIFIABLE
+------------------------------------
+
+Identifiable from these recordings:
+
+  - That the plateau-and-step pattern inside holds is the same on both devices, and that
+    the PM100's extra freezes are in activity wear and go with contact loss (section 1).
+  - A masking rule for frozen runs and its cost, about 1.2 % of hold-seconds (section 2).
+  - A device difference in the onset of the recovery rise within RV at matched hold length,
+    about ten seconds later on the PM100, with a bootstrap interval that excludes the
+    Masimo's (section 3). Device, month, finger and training phase are confounded, so this
+    is a difference between the recording periods that is consistent with a device
+    difference, not a device property.
+
+Suggested, not established:
+
+  - That the sensor's own low-pass is short, under 8 s, on both devices: a profile under a
+    latent form that does not fit (section 4).
+
+Not identifiable:
+
+  - The split of the post-hold delay into lung-to-finger transit and device delay, or into
+    transit and plateau (T against P). Only their sum is pinned.
+  - Kernel form (pure delay against low-pass) from the slope dependence: one session
+    carries the correlation.
+  - Any dependence of lag on heart rate.
+  - Whether a PM100 freeze is the device, the finger, the diver's movement or the app's
+    sampling: the export has no quality flag and no raw frames.
+  - Anything about the PM100's averaging mode: the parser skips the fast/slow fields and
+    Nadir drops the quality.
+
+So there is no per-device sensor model to carry into v8 yet. What there is: a cleaning rule,
+a device offset of about ten seconds in recovery onset to treat as a nuisance parameter per
+recording period, and a suggestion that the smoothing is short. A model of the hold itself that uses these
+should treat the sensor as "delay about 25 to 40 s, smoothing under 8 s, integer output,
+occasional freezes masked" and fit the delay per hold, which is what v7's delta_h was doing
+by another name.
+
+
+6. WHAT WOULD MAKE IT IDENTIFIABLE
+----------------------------------
+
+  1. One session with both oximeters on at once, on two fingers of the same hand, an RV
+     table of five or six holds and one full-lung hold, with the cooldown on so every nadir
+     is in the trace. Nadir's `VitalsFusion` records one oximeter's SpO2 at a time (the
+     first in the diver's order with a fresh reading), so the second device has to be logged
+     by STAmina on the Masimo while Nadir records the PM100, with the clocks aligned at the
+     first hold. Device against finger then separates within a single hold.
+  2. A one-minute raw capture from the PM100 through the signed BluetoothEngine CLI
+     (`sensor raw --name PM100 --csv`) with a finger in it, to read the PLX flags byte: if
+     the Fast/Slow bits are set, the averaging mode is known and Nadir is recording whichever
+     field the parser takes first. This needs Thomas's finger in the device; it is a request,
+     not something this session can do.
+  3. In Nadir, keep the PLX quality on the sample (BluetoothEngine already derives it) and
+     the oximeter model on the session (#439). The quality flag is what would let a freeze be
+     attributed; the model is what would let two periods be compared at all.
+
+Nothing here changes the framing rule: all of this is about reading recordings that already
+happened. It does not forecast and it does not warn.

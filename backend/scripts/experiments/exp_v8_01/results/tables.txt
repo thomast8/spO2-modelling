@@ -1,0 +1,94 @@
+A. TRACE STATISTICS BY DEVICE AND STEP KIND
+
+  device  kind       samples  run median run p90 runs>=10s  |step| median  max   freeze 8s/3pt per 1000s near loss  moving   freeze 5s/2pt per 1000s near loss  moving
+  masimo  hold          2881           4      24      0.23              1    6               3       1.0         3       0               9       3.1         7       2
+  masimo  other         3085           2      15      0.15              1   10               4       1.3         0       4               8       2.6         0       7
+  pm100   activity      3826           5      29      0.30              1   16              17       4.4        12      10              44      11.5        30      23
+  pm100   hold          6279           3      16      0.18              1   27               6       1.0         5       2              21       3.3         7      13
+  pm100   other         6824           3      21      0.21              1   55               8       1.2         3       7              30       4.4         7      22
+
+  near loss = the run or the three seconds after it contain a no-contact sample or a missing second;
+  moving = the trace fell or rose 0.1 %/s or more over the 30 s before the run.
+
+B. FREEZE MASK: HOLD-SECONDS A FIT WOULD DROP
+
+  masimo    14 QC-passing holds,   2951 s of trace,   34 s masked (1.2 %), 4 holds touched
+  pm100     26 QC-passing holds,   5436 s of trace,   68 s masked (1.3 %), 6 holds touched
+
+  Rule: a run of 8 s or more followed by a step of 3 points or more; the run is masked.
+
+C. MODEL-FREE LAG MEASURES (holds with at least 15 s of trace after the end)
+
+  hold              device  type   dur nadir nadir delay  onset  end slope  HR end rec s
+  2026-08-06-RV2    masimo  RV      78    83          16     24      -0.23      52    31
+  2026-08-06-RV3    masimo  RV      81    78          25     27      -0.37      61    34
+  2026-08-06-RV4    masimo  RV     102    69          19     22      -0.47      67    30
+  2026-08-06-RV5    masimo  RV     122    59          21     25      -0.53      68    36
+  2026-08-06-RV6    masimo  RV     137    53          20     32      -0.57      70    46
+  2026-08-06-RV7    masimo  RV     132    51          27     31      -0.63      71    37
+  2026-08-06-RV8    masimo  RV     138    49          23     29      -0.63      68    33
+  2026-08-08-FL5    masimo  FL     207    90          29     38      -0.07     101    40
+  2026-08-08-FL6    masimo  FL     284    78          31     37      -0.07      82    41
+  2026-09-02-FL1    pm100   FL     300    76          29     39      -0.13      80    42
+  2026-09-04-RV1    pm100   RV      90    74          19     36      -0.40      70    43
+  2026-09-04-RV2    pm100   RV     125    63          34     35      -0.50      77    54
+  2026-09-04-RV3    pm100   RV     149    51          33     21      -0.57      84    43
+  2026-09-04-FL4    pm100   FL     309    74          24     34      -0.07      79    40
+  2026-09-04-FL5    pm100   FL     332    76          19      -      -0.07      89    20
+  2026-09-05-FL1    pm100   FL     301    81           1     27      -0.23      56    31
+  2026-09-05-FL2    pm100   FL     332    71          10      -      -0.30      62    20
+  2026-09-08-FL3    pm100   FL     150    82          23     37      -0.20      83    60
+  2026-10-02-RV1    pm100   RV      74    84          12     59      -0.17      57    29
+  2026-10-02-RV3    pm100   RV      77    76          16     38      -0.50      58    67
+  2026-10-02-RV5    pm100   RV     105    70          16     32      -0.27      70    53
+  2026-10-02-RV7    pm100   RV     101    73          13      -      -0.40      57    23
+  2026-10-02-RV9    pm100   RV      93    79           7      -      -0.27      57    19
+  2026-10-12-RV3    pm100   RV      90    70          47     53      -0.70      66    59
+  2026-10-12-RV4    pm100   RV     120    56          40     50      -0.30      60    52
+  2026-10-12-RV5    pm100   RV     128    48          41     47      -0.60      71    55
+  2026-10-12-RV6    pm100   RV     139    44          39     44      -0.83      57    49
+  2026-10-16-RV1    pm100   RV      60    84          37     54      -0.23      71    58
+  2026-10-16-RV2    pm100   RV      91    69          30     39      -0.33      77    47
+  2026-10-16-RV3    pm100   RV     113    58          25     35      -0.17      79    43
+  2026-10-16-RV4    pm100   RV     127    46          27     37      -0.50      80    43
+  2026-10-16-RV5    pm100   RV     138    39          15     35      -0.83      87    50
+  2026-10-16-RV6    pm100   RV     159    36           9     25      -0.43      90    30
+  2026-02-21-FRC2   masimo  FRC    135    78          17     41      -0.23      61    48
+  2026-02-21-RV3    masimo  RV     130    52          10     16      -0.77      79    49
+  2026-02-21-FRC5   masimo  FRC    188    41          35     42      -0.87      72    60
+  2026-02-21-FL6    masimo  FL     373    52          23     29      -0.27      55    38
+
+  Medians with 95 % bootstrap intervals over holds:
+
+  group                   n  nadir delay (s)         onset (s)               
+  masimo, all            13    23 [ 19,  27]           29 [ 25,  37] n=13    
+  pm100, all             24    24 [ 16,  31]           37 [ 35,  42] n=20    
+  masimo, FL              3    29 [ 23,  31]           37 [ 29,  38] n=3     
+  pm100, FL               6    21 [  6,  26]           36 [ 27,  39] n=4     
+  masimo, RV              8    20 [ 16,  25]           26 [ 22,  31] n=8     
+  pm100, RV              18    26 [ 16,  34]           38 [ 35,  47] n=16    
+  pm100, RV, 90-140 s    13    27 [ 16,  39]           37 [ 35,  47] n=11    
+  masimo, RV, 90-140 s    6    20 [ 14,  25]           27 [ 19,  32] n=6     
+  Onset is censored where the trace ends before the rise: 2026-09-04-FL5 (>= 20 s), 2026-09-05-FL2 (>= 20 s), 2026-10-02-RV7 (>= 23 s), 2026-10-02-RV9 (>= 19 s). Those holds are in the nadir-delay medians and out of the onset medians, which are therefore biased short.
+
+  Nadir delay against the slope over the last 30 s of the hold (Pearson r):
+    masimo   r = +0.08 over 13 holds; leaving one session out, r runs -0.33 to +0.41 (closest to zero without 2026-08-06)
+    pm100    r = -0.35 over 24 holds; leaving one session out, r runs -0.58 to -0.02 (closest to zero without 2026-10-12)
+
+  Onset = 32 +8·[PM100] +4·slope; residual sd 9 s. Correlation of the residual with end-of-hold heart rate: r = -0.22 over 33 holds. Reported, not modelled.
+
+D. POST-HOLD SENSOR FIT (holds with at least 45 s of trace after the end)
+
+  Latent SaO2: the last-30-s descent continues for T seconds past the end of the hold, sits on
+  a floor for P seconds, then rises exponentially to the pre-hold baseline with a per-hold time
+  constant tau_r. Sensor: first-order low-pass with time constant tau_s, started at the first
+  observed value. T absorbs lung-to-finger transit and any pure device delay, and T + P is when
+  the rise reaches the finger; neither splits into physiology and device here. tau_s and tau_r are
+  both low-pass, so tau_s is profiled below; its interval is what the data allow, not what the
+  fit reports.
+
+  masimo   n= 4  T = 13.8 s [ 8.6, 21.4]  P = 23.6 s [12.5, 36.2]  tau_s =  2.7 s [ 0.5,  2.8]  tau_r median  7.7 s  RMSE 4.56
+           tau_s profile (RMSE): 1s:4.64  2s:4.59  4s:4.63  8s:5.45  12s:6.54  16s:7.61  24s:9.59  32s:11.15
+  pm100    n=11  T = 16.8 s [ 9.6, 33.5]  P = 21.8 s [ 0.0, 33.9]  tau_s =  3.2 s [ 0.7,  4.6]  tau_r median 20.1 s  RMSE 5.37
+           tau_s profile (RMSE): 1s:5.41  2s:5.38  4s:5.37  8s:5.56  12s:5.91  16s:6.48  24s:7.79  32s:8.95
+
