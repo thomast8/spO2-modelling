@@ -174,11 +174,15 @@ one, and that is the point: the same code on the same session through a second l
     2026-09-05-FL1, 10 s after FL2 the same evening, 29 s after 2026-09-02-FL1. v7's
     per-hold delta_h existed for this; the spread here (-16 to +20 s, see below) is far
     wider than February's (-8 to +7 s).
-  - Readings hold flat for 10 to 20 s after the end of a hold, then step. The PM100 traces
-    behave differently from the MightySat ones around the nadir. This is the
-    device-specific sensor model the handoff asks for. With the device now known, what is
-    still not separable from it is the finger, the diver's movement and the app's sampling,
-    which only a paired recording would settle.
+  - Readings are integers that sit flat for seconds at a time on both devices (median run
+    3 to 4 s; a fifth of runs last 10 s or more) and now and then freeze and jump. In holds
+    the freeze-then-jump rate (a run of 8 s or more followed by a step of 3 points or more)
+    is the same on both devices, 1.0 per 1000 s; the PM100's extra freezes are in activity
+    recordings and mostly coincide with contact loss. The device difference that survives
+    the counting is slower: the reading's first rise after a hold comes a median 37 s after
+    the end on the PM100 against 29 s on the Masimo, and the PM100's nadir delay spreads
+    1 to 47 s against 10 to 35 s. exp_v8_01 takes this up; a paired recording is what
+    would separate device from finger, movement and sampling.
   - The 8 September session is a CO2 table (five 150 s holds). SpO2 barely moves in four
     of them and v7's QC drops them. CO2 tables are not desaturation data.
   - RV is now the best-covered lung volume: 18 app-recorded RV holds in four sessions, 60
@@ -286,14 +290,16 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
 
   4. The sensor lag is not a lag. Per-hold deltas sat within -8 to +7 s in February; here
      they sit at or within 0.1 s of the +20 s bound on the longest full-lung hold of three
-     sessions (effective lag 46 to 51 s) and two holds sit at the 5 s floor. The app-recorded traces hold flat
-     at a value for 10 to 20 s and then step 5 to 13 points, in every RV table and after
-     most holds where the trace continues (results/2026-10-16.png shows six in a row). A gamma kernel smooths; it
-     cannot hold and step. The inflated lags are Stage A stretching the kernel to cover a
-     staircase. This is the per-device sensor model the handoff asks for. The device is
-     the PM100 on every app session (Thomas, 17 October); whether the staircase is the
-     PM100's own averaging, the finger, the diver's movement or the app's 1 Hz sampling
-     needs a recording with two sensors on at once.
+     sessions (effective lag 46 to 51 s) and two holds sit at the 5 s floor. Those three
+     holds have 0 to 20 s of trace after them, so the nadir-timing term has nothing to
+     grip and the kernel is set by the integer plateaus of a slow descent instead. The
+     traces are piecewise constant on both devices (results/2026-10-16.png shows it on six
+     RV holds in a row), and v7's gamma kernel can only smooth, never hold and step; but the
+     counting in exp_v8_01 says the plateau-and-step pattern inside holds is the same on the
+     Masimo and the PM100, so it is a property of integer oximetry of a slow signal, not of
+     one device. What is device-specific is the slower recovery onset on the PM100 (37 s
+     against 29 s median); with one device per period that cannot yet be separated from
+     month, finger or training phase.
 
   5. Stage A is fragile. With two holds per session it put 2026-09-05-FL1 at S_min 97 %,
      v_up 2.8 %/s and lag at the floor (R2a -0.05) while Stage B fits the same hold at
@@ -370,7 +376,9 @@ x8, then full). What is still missing, in order:
   3. Any measured lung volumes (FVC from Health, lab TLC/RV) and body mass, for the
      mechanistic model's inputs. Not needed for the baseline, needed before v8.
   4. For the sensor model: one session with the PM100 and the MightySat on at the same
-     time, so the staircase can be attributed to a device rather than to the finger.
+     time, so the slower PM100 onset can be attributed to the device rather than to the
+     finger or the month. Nadir's `VitalsFusion` records one oximeter's SpO2 at a time, so
+     the second trace has to be logged by STAmina or the BluetoothEngine CLI alongside.
 
 Nothing here changes the framing rule: whatever comes next is retrospective and
 descriptive. It reconstructs what happened; it never says how long a hold can go.
