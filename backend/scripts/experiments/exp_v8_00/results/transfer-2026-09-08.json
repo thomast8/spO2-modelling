@@ -1,0 +1,52 @@
+{
+ "group": "2026-09-08",
+ "globals_from": "2026-02-21",
+ "n_holds": 1,
+ "n_points": 210,
+ "excluded": {
+  "2026-09-08-FL1": "range < 5%",
+  "2026-09-08-FL2": "nadir 120s before end",
+  "2026-09-08-FL4": "nadir 148s before end",
+  "2026-09-08-FL5": "nadir 37s before end"
+ },
+ "stage_a": {
+  "converged": true,
+  "loss": 307.8523518865881,
+  "tau_0": 17.67785169429407,
+  "p": 3.395113305750143,
+  "tau_0_at_bound": true,
+  "p_at_bound": true
+ },
+ "stage_b": {
+  "converged": true,
+  "loss": 348.8476744826927,
+  "k_co2": 0.1504063045103929,
+  "gamma": 1.8519794190786867,
+  "k_co2_at_bound": false,
+  "gamma_at_bound": false
+ },
+ "holds": [
+  {
+   "id": "2026-09-08-FL3",
+   "type": "FL",
+   "duration": 150.0,
+   "nadir_obs": 82.0,
+   "s_base": 97.0,
+   "delta": 0.005248661843544333,
+   "eff_lag": 17.683100356137615,
+   "S_min": 87.98678042133889,
+   "v_up": 0.002873341335842383,
+   "r2a_stage_a": 0.03423279205282881,
+   "r2n_stage_a": 0.796512195150499,
+   "tau_washout": 297.37211267909663,
+   "tau_washout_at_bound": false,
+   "paco2_0": 49.54472375802935,
+   "paco2_0_at_bound": false,
+   "r2a_stage_b": 0.3146576950182478,
+   "r2n_stage_b": 0.8514729231193721,
+   "nadir_err_stage_b": 0.0,
+   "nadir_spo2_err_stage_b": 1.9965937317688258,
+   "rmse_apnea_stage_b": 1.4467958243519596
+  }
+ ]
+}
