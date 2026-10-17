@@ -30,14 +30,17 @@ the importer's default (`full`, `StaminaImport.kind(for:)`), not what the diver 
 other sessions were recorded by the app on its connected oximeter; Thomas confirmed on
 17 October that this was the Medisana PM100 (finger) for every app session from
 2 September onwards. So: Masimo MightySat in February and August, PM100 from September.
+He also confirmed that the 6 August table was eight RV exhale holds and one full-lung
+hold; the loader overrides the importer's labels for that session (`LABEL_OVERRIDES`).
 
 The handoff for this work assumed "months of recorded holds". The export has:
 
   sessions                          48   (13 with any SpO2)
   performed holds                  229   (201 full, 23 RV, 5 packed, 0 FRC, 0 unlabelled)
   holds with any SpO2               61   (38 full, 20 RV, 3 packed)
-  holds passing v7's QC             36   (18 full, 18 RV, 0 FRC) in nine sessions
-    of which STAmina-recorded       10   (6 and 8 August, lung volume unknown)
+  holds passing v7's QC             36   (11 full, 25 RV, 0 FRC) in nine sessions,
+                                         after relabelling 6 August (export says 18/18)
+    of which STAmina-recorded       10   (6 August: 7 RV + 1 full; 8 August: 2 full)
     of which app-recorded           26   (8 full, 18 RV; 2 September to 16 October)
   holds reaching SpO2 < 85 %        27   (of the 36)
   packed holds                       3   (v7 has no bounds for packed; skipped)
@@ -52,14 +55,14 @@ missing seconds, rec = seconds of trace after the hold, contr = contraction mark
   2026-03-04-FL2        225    98     2    8%   14    5     1  stamina-import  range < 5%
   2026-03-04-FL3        225    97     3    8%   16    5     0  stamina-import  range < 5%
   2026-03-04-FL4        225    98     2   10%   18    5     0  stamina-import  range < 5%
-  2026-08-06-FL1         65    95     4    0%    1   32     0  stamina-import  range < 5%
-  2026-08-06-FL2         78    91     8    3%    2   31     0  stamina-import  ok
-  2026-08-06-FL3         81    88    11    4%    2   34     0  stamina-import  ok
-  2026-08-06-FL4        102    80    19    4%    2   30     0  stamina-import  ok
-  2026-08-06-FL5        122    70    29    2%    2   36     0  stamina-import  ok
-  2026-08-06-FL6        137    63    36    1%    2   46     0  stamina-import  ok
-  2026-08-06-FL7        132    67    32    0%    1   37     0  stamina-import  ok
-  2026-08-06-FL8        138    58    41    1%    2   33     0  stamina-import  ok
+  2026-08-06-RV1         65    95     4    0%    1   32     0  stamina-import  range < 5%
+  2026-08-06-RV2         78    91     8    3%    2   31     0  stamina-import  ok
+  2026-08-06-RV3         81    88    11    4%    2   34     0  stamina-import  ok
+  2026-08-06-RV4        102    80    19    4%    2   30     0  stamina-import  ok
+  2026-08-06-RV5        122    70    29    2%    2   36     0  stamina-import  ok
+  2026-08-06-RV6        137    63    36    1%    2   46     0  stamina-import  ok
+  2026-08-06-RV7        132    67    32    0%    1   37     0  stamina-import  ok
+  2026-08-06-RV8        138    58    41    1%    2   33     0  stamina-import  ok
   2026-08-06-FL9        321    79    21   11%   32    0     1  stamina-import  ok
   2026-08-08-FL1         95    97     2   28%   26    5     1  stamina-import  range < 5%
   2026-08-08-FL2        136    98     1   15%   18    5     0  stamina-import  range < 5%
@@ -134,7 +137,8 @@ Loader decisions, all forced by v7's code rather than chosen:
     gap longer than 10 s below 95 %, excludes the hold. v7 itself trained on FL#6 with a
     6 s gap near its nadir, so the line is above that.
   - Nadir `full` maps to v7 FL, `rv` to RV. There are no FRC holds. `packed` is skipped:
-    v7 has no bounds for it.
+    v7 has no bounds for it. One session's labels are overridden from Thomas's answer
+    (6 August: RV x8, then full); the inventory and every fit below use the corrected ones.
 
 Hold windows differ slightly from v7's own: the CSV's Apnea interval for FRC#2 is 135 s
 where the v7 database had 132, because the app's parser trimmed rows the loader keeps.
@@ -145,15 +149,15 @@ one, and that is the point: the same code on the same session through a second l
 2. THINGS THE DATA SAYS BEFORE ANY FITTING
 ------------------------------------------
 
-  - The 6 August "full" holds are not full-lung holds. Eight holds of 65 to 138 s reach
-    58 % SpO2, which is RV behaviour (the 16 October RV table reaches 42 % at 159 s; the
-    September full-lung holds need 300 s to reach 80 %). The label is the STAmina
-    importer's default. Read from the traces: holds 1 to 8 drop below 95 % at 66 to 74 s
-    into the hold, where the PM100 RV tables do at 59 to 72 s and February's two FRC holds
-    at 106 s, so they are exhale holds and most likely RV; hold 9 (321 s, below 95 % at
-    200 s, nadir 79 %) is a full-lung hold like the 8 August ones. Until Thomas confirms,
-    the session is fitted with the importer's labels and kept as a labelled example of what
-    v7 does when the type bounds are wrong, not as evidence about full-lung physiology.
+  - The 6 August "full" holds were RV holds. Eight holds of 65 to 138 s reach 58 % SpO2,
+    which is RV behaviour (the 16 October RV table reaches 42 % at 159 s; the September
+    full-lung holds need 300 s to reach 80 %). The label was the STAmina importer's
+    default. Read from the traces before asking: holds 1 to 8 drop below 95 % at 66 to
+    74 s into the hold, where the PM100 RV tables do at 59 to 72 s and February's two FRC
+    holds at 106 s; hold 9 (321 s, below 95 % at 200 s, nadir 79 %) matches the 8 August
+    full-lung holds. Thomas confirmed exactly that. The onset of desaturation is a usable
+    lung-volume check on any imported session, and the mislabelled fit (section 4, item 7)
+    shows what v7 does when the type bounds are wrong.
   - The 2 October session ("True tidal breathing") alternates an RV hold with a full-lung
     hold seven seconds later, with no recovery between them. The full-lung holds start at
     79 to 89 % with the reading still falling from the RV hold before, so their apnea-
@@ -197,7 +201,7 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
   group               holds   pts  tau_0     p   k_co2  gamma    R2a  RMSEa  bound hits
   v7.08 (published)       4   800  17.68  3.39  0.1385  1.863  0.972      -  tau_w FRC x2, paco2_0 RV3
   2026-02-21              4  1021  17.68  3.40  0.1505  1.853  0.968   1.53  tau_w FRC2, FRC5; paco2_0 RV3
-  2026-08-06 (STAmina)    8  1358  25.98  2.28  0.0200  1.779  0.964   0.90  k_co2 (lower); tau_w lower x4; paco2_0 FL9 (lower)
+  2026-08-06 (STAmina)    8  1358  25.98  2.28  0.0200  1.662  0.957   0.94  k_co2 (lower)
   2026-08-08 (STAmina)    2   572  39.07  3.17  0.0846  1.699  0.347   1.36  -
   2026-09-02              2   659  20.92  4.22  0.0200  2.507  0.899   1.45  k_co2 (lower); paco2_0 FL1 (upper)
   2026-09-04              5  1210  30.52  3.08  0.0607  1.991  0.957   1.14  paco2_0 FL5 (upper); delta FL5 (+20)
@@ -210,9 +214,10 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
   R2a = mean Stage B R-squared on the apnea window, v7's primary metric; RMSEa = mean
   per-hold RMSE on the same window, in SpO2 points. 2026-03-04, 2026-09-18, 2026-10-04
   and 2026-10-07 have no row: no hold passed QC (the last two are one 39 s hold below the
-  range rule and two packed holds). The 2026-08-06 row is fitted with the importer's
-  "full" labels and the FL bounds; four of its tau_washout sit at the FL lower bound of
-  50 s (see section 2).
+  range rule and two packed holds). The 2026-08-06 row uses the corrected labels (RV x7,
+  full x1); under the importer's "full" labels the same session fitted at R2a 0.964 and
+  RMSE 0.90 with four tau_washout at the FL lower bound of 50 s, gamma 1.78 and the 321 s
+  hold's paco2_0 at its 20 mmHg floor (section 4, item 7).
 
   A pooled fit of all app-recorded holds under one set of globals was started on the
   29 September data and abandoned: at v7's optimiser settings a 10-hold Stage A is 32
@@ -230,7 +235,7 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
   two, not the sensor stage.
 
   session        n   R2a free  frozen   RMSE free  frozen   |nadir err|   tau_washout free -> frozen (type)
-  2026-08-06    8      0.964   0.817        0.90    2.11          5.3   50 50* 50* 50* 50 51 50* 58 -> 114 113 110 96 101 108 102 178 (FL labels)
+  2026-08-06    8      0.957   0.954        0.94    1.18          3.3   46 44 45 45 46 46 45 -> 79 79 80 80* 80* 80* 80* (RV); 243 -> 500* (FL)
   2026-08-08    2      0.347   0.288        1.36    1.40          1.0   328 328 -> 500* 500* (FL)
   2026-09-02    2      0.899   0.896        1.45    1.46          1.0   212 212 -> 414 414 (FL)
   2026-09-04    5      0.957   0.957        1.14    1.16          1.9   47 49 50 -> 76 78 78 (RV); 321 321 -> 500* 500* (FL)
@@ -271,10 +276,10 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
      app-recorded session with real desaturation (table 3.2). The per-hold tau_washout
      absorbs the difference: RV washout goes 42 to 80 s (the bound) on 2 October and
      full-lung 321 to 500 s (the bound) on 4 September to make room for February's faster
-     CO2 rise. The one session that does lose fit (6 August, -0.15, every paco2_0 at a
-     bound) is the STAmina import fitted under its mislabelled full-lung bounds, where the
-     per-hold knobs run out of room; that is the labels failing, not a global being
-     identified. Items 2 and 3 together are the diagnosis: the globals wander because the data cannot pin
+     CO2 rise. The 6 August Masimo session behaves the same way (-0.003); under its
+     original wrong full-lung labels it had lost 0.15 with every paco2_0 at a bound, so
+     the fit was sensitive to the labels, never to the globals. Items 2 and 3 together
+     are the diagnosis: the globals wander because the data cannot pin
      them, and the data cannot pin them because every hold has two free knobs of its own.
      v7's k_co2 profile had an interior minimum only because the FRC bound held the FRC
      holds' tau_washout at 100 s. There are no FRC holds here, and nothing else holds it.
@@ -292,7 +297,7 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
 
   5. Stage A is fragile. With two holds per session it put 2026-09-05-FL1 at S_min 97 %,
      v_up 2.8 %/s and lag at the floor (R2a -0.05) while Stage B fits the same hold at
-     0.94; v_up is at its 3 %/s bound on five holds in four sessions. On the RV
+     0.94; v_up is at its 3 %/s bound on five holds in three sessions. On the RV
      tables the latent template misses the staircase (2026-10-16-RV2: Stage A 0.57, Stage
      B 0.92). Eight to twenty parameters against 2 to 8 holds with 5 to 60 s of recovery
      is not identified, and the nadir-timing penalty has nothing to grip when the nadir
@@ -300,15 +305,18 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
 
   6. Stage B still describes the apnea window, as a curve fit does. Sessions whose holds
      reach below 85 % fit at R2a 0.90 to 0.96 with per-hold tau_washout and paco2_0 free.
-     RV washout by session: 42, 48, 50, 77 s (February 52); full-lung: 191, 212, 321,
-     381 s (February 408). paco2_0 sits at a bound on eight holds in seven sessions, at
-     both ends (20 and 30 at the bottom, 50 and 55 at the top). Nothing here is a parameter
+     RV washout by session: 42, 45, 48, 50, 77 s (February 52); full-lung: 191, 212,
+     243, 321, 381 s (February 408). paco2_0 sits at a bound on seven holds in six sessions, at
+     both ends (30 at the bottom, 50 and 55 at the top). Nothing here is a parameter
      you could carry into a hold you have not seen.
 
-  7. Labels matter more than physiology for the type bounds. The 6 August STAmina
-     session, fitted with the importer's "full" labels, puts four of eight tau_washout at
-     the full-lung lower bound of 50 s and its 321 s hold's paco2_0 at the 20 mmHg lower
-     bound. Those holds desaturate like RV holds and the bounds say so.
+  7. Labels matter more than physiology for the type bounds. Fitted first with the
+     importer's "full" labels, the 6 August STAmina session put four of eight tau_washout
+     at the full-lung lower bound of 50 s, its 321 s hold's paco2_0 at the 20 mmHg floor
+     and gamma at 1.78, and lost 0.15 R2a when the globals were frozen. Relabelled RV, as
+     Thomas confirmed, the same traces fit with tau_washout 44 to 46 s interior (the other
+     RV sessions: 42 to 77), paco2_0 39 to 43, gamma 1.66, and lose 0.003 when frozen.
+     The bounds were doing the diagnosis the label should have.
 
   8. v7 does not apply below about 120 s of hold or above about 90 % nadir, as its spec
      says: the shallow 8 August and 8 September holds fit at R2a 0.29 to 0.35.
@@ -320,14 +328,15 @@ maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same boun
 v7.08 is confirmed as what its own spec feared: a curve fit with diagnostics, not a
 model. Across ten sessions and two oximeters every global parameter moves well outside
 the spread v7 called "identified", and pinning all four to another session's values
-costs nothing on the app-recorded sessions, because the per-hold parameters do the work. The apnea-window fit quality
+costs nothing on any session with real desaturation, because the per-hold parameters do
+the work. The apnea-window fit quality
 survives both ways, which is the definition of a model that does not transfer and cannot
 be falsified by this data.
 
 The baseline v8 has to beat is therefore not "mean R2a 0.97 in sample", and not even the
-free per-session rows in 3.1. It is table 3.2: on held-out app-recorded sessions with
-February's globals carried over and two free parameters per hold, apnea-window RMSE of
-1.1 to 2.4 SpO2 points and a nadir SpO2 error of 1 to 4 points (R2a 0.90 to 0.96). A v8 that
+free per-session rows in 3.1. It is table 3.2: on held-out sessions with February's globals
+carried over and two free parameters per hold, apnea-window RMSE of 1.1 to 2.4 SpO2
+points and a nadir SpO2 error of 1 to 4 points (R2a 0.90 to 0.96). A v8 that
 earns its place has to match that with no per-hold free parameters, or with per-hold
 parameters that are predicted from things Nadir records (lung volume, pack count,
 breathe-up, time since the last hold) rather than fitted. The honest metric is held-out
@@ -349,21 +358,18 @@ that exists in the data, not a hierarchical physiology model.
 6. DATA NEEDED BEFORE V8 WORK CAN START
 ---------------------------------------
 
-The fresh export answered the first request, and Thomas confirmed the device: the PM100
-recorded every app session from 2 September onwards, the Masimo everything before. What
-is still missing, in order:
+The fresh export answered the first request. Thomas confirmed the device (PM100 on every
+app session from 2 September onwards, Masimo before) and the 6 August lung volumes (RV
+x8, then full). What is still missing, in order:
 
-  1. What lung volume the 6 August holds really were. The importer labelled them full;
-     the traces say holds 1 to 8 are exhale (RV by onset timing) and hold 9 full. A
-     one-line confirmation fixes nine holds and, if they were FRC, adds the first FRC data.
-  2. FRC holds, or confirmation that FRC is not part of the training. v7's structure
+  1. FRC holds, or confirmation that FRC is not part of the training. v7's structure
      depends on FRC; v8 needs at least one lung-volume contrast besides full vs RV, and
      the packed holds (three so far) are the other candidate.
-  3. The post-last-hold cooldown on, so the nadir of the max holds is in the trace. The
+  2. The post-last-hold cooldown on, so the nadir of the max holds is in the trace. The
      12 October 345 s hold has 7 s after it.
-  4. Any measured lung volumes (FVC from Health, lab TLC/RV) and body mass, for the
+  3. Any measured lung volumes (FVC from Health, lab TLC/RV) and body mass, for the
      mechanistic model's inputs. Not needed for the baseline, needed before v8.
-  5. For the sensor model: one session with the PM100 and the MightySat on at the same
+  4. For the sensor model: one session with the PM100 and the MightySat on at the same
      time, so the staircase can be attributed to a device rather than to the finger.
 
 Nothing here changes the framing rule: whatever comes next is retrospective and

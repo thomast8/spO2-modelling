@@ -34,6 +34,12 @@ MIN_HOLD_S = 30
 
 STYLE_TO_TYPE = {"full": "FL", "frc": "FRC", "rv": "RV"}
 
+# Lung volumes the export has wrong, by session day and hold number (1-based, counting
+# every performed hold). A STAmina import carries no lung volume and Nadir's importer
+# labels every hold `full`; Thomas confirmed on 17 October 2026 that the 6 August table
+# was eight RV exhale holds followed by one full-lung hold.
+LABEL_OVERRIDES = {"2026-08-06": {**{k: "RV" for k in range(1, 9)}, 9: "FL"}}
+
 
 def _fill_gaps(t, spo2):
     """Return a complete 1 Hz grid with linear interpolation over missing seconds."""
@@ -102,7 +108,7 @@ def load_nadir(path):
             ]
             if not good:
                 continue
-            hold_type = STYLE_TO_TYPE.get(step.get("style"))
+            hold_type = LABEL_OVERRIDES.get(day, {}).get(k) or STYLE_TO_TYPE.get(step.get("style"))
             if hold_type is None:
                 print(f"  skip {day} hold {k}: lung volume {step.get('style')!r} has no v7 bounds")
                 continue
@@ -156,6 +162,7 @@ def load_nadir(path):
                     {
                         "session": day,
                         "source": "stamina-import" if imported else "nadir",
+                        "relabelled": k in LABEL_OVERRIDES.get(day, {}),
                         "duration": duration,
                         "planned": step.get("plannedDuration"),
                         "outcome": outcome,
@@ -256,6 +263,7 @@ def load_stamina(path):
                     "max_gap": max_gap,
                     "gap_off_plateau": off_plateau,
                     "no_contact": 0,
+                    "relabelled": False,
                     "recovery_s": float(len(t_rec)),
                 },
             )
