@@ -39,7 +39,8 @@
    "r2a_stage_b": 0.9408314057209367,
    "r2n_stage_b": 0.8268533671725337,
    "nadir_err_stage_b": 4.0,
-   "nadir_spo2_err_stage_b": -0.09678276923294504
+   "nadir_spo2_err_stage_b": -0.09678276923294504,
+   "rmse_apnea_stage_b": 1.0721785121964948
   },
   {
    "id": "2026-09-05-FL2",
@@ -60,7 +61,8 @@
    "r2a_stage_b": 0.9678063129115586,
    "r2n_stage_b": 0.9775714121166308,
    "nadir_err_stage_b": 1.0,
-   "nadir_spo2_err_stage_b": -1.5853177331619008
+   "nadir_spo2_err_stage_b": -1.5853177331619008,
+   "rmse_apnea_stage_b": 1.1879765342352477
   }
  ]
 }

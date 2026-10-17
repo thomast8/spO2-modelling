@@ -39,7 +39,8 @@
    "r2a_stage_b": 0.9730609627345904,
    "r2n_stage_b": 0.250610101760939,
    "nadir_err_stage_b": 0.0,
-   "nadir_spo2_err_stage_b": 0.7066895780787945
+   "nadir_spo2_err_stage_b": 0.7066895780787945,
+   "rmse_apnea_stage_b": 0.6519250994515061
   },
   {
    "id": "2026-09-04-RV2",
@@ -60,7 +61,8 @@
    "r2a_stage_b": 0.9909061641917738,
    "r2n_stage_b": 0.565007262358744,
    "nadir_err_stage_b": 3.0,
-   "nadir_spo2_err_stage_b": -2.7791028529997845
+   "nadir_spo2_err_stage_b": -2.7791028529997845,
+   "rmse_apnea_stage_b": 0.5908613587966162
   },
   {
    "id": "2026-09-04-RV3",
@@ -81,7 +83,8 @@
    "r2a_stage_b": 0.9752151113626709,
    "r2n_stage_b": 0.9724386013701518,
    "nadir_err_stage_b": 1.0,
-   "nadir_spo2_err_stage_b": -0.8206931903921344
+   "nadir_spo2_err_stage_b": -0.8206931903921344,
+   "rmse_apnea_stage_b": 1.8487555609879283
   },
   {
    "id": "2026-09-04-FL4",
@@ -102,7 +105,8 @@
    "r2a_stage_b": 0.9259032919053568,
    "r2n_stage_b": 0.8519980528456528,
    "nadir_err_stage_b": 4.0,
-   "nadir_spo2_err_stage_b": 0.28760532305719266
+   "nadir_spo2_err_stage_b": 0.28760532305719266,
+   "rmse_apnea_stage_b": 0.9436373525707086
   },
   {
    "id": "2026-09-04-FL5",
@@ -123,7 +127,8 @@
    "r2a_stage_b": 0.9181305705133813,
    "r2n_stage_b": 0.9434457754191543,
    "nadir_err_stage_b": 0.0,
-   "nadir_spo2_err_stage_b": -0.9425638979896291
+   "nadir_spo2_err_stage_b": -0.9425638979896291,
+   "rmse_apnea_stage_b": 1.6437506183214476
   }
  ]
 }

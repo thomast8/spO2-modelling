@@ -24,8 +24,9 @@
 _(newest first)_
 
 - [x] v8.00 baseline: v7.08 refitted per session on the Nadir recordings (2026-10-17)
-  - tau_0 6.6-30.5 s, k_co2 0.02-0.15 mmHg/s, gamma 1.6-2.5 across sessions: v7's globals do not transfer
-  - Loader for Nadir exports + STAmina CSVs, drift table and data request: `backend/scripts/experiments/exp_v8_00/`
+  - Ten sessions, two oximeters: tau_0 6.6-39.1 s, k_co2 0.02-0.15 mmHg/s, gamma 1.16-2.51 across sessions
+  - Freezing all four globals at February's values costs under 0.025 R2a: the per-hold parameters do the work
+  - Loader for Nadir exports + STAmina CSVs, transfer test, drift table and data request: `backend/scripts/experiments/exp_v8_00/`
 - [x] v7 model shipped (v7.08) - 8/8 success criteria PASS, formal methods spec written (2026-03-13)
   - Two-stage sensor + physiology model for breath-hold apnea SpO2 prediction
   - k_co2 identified (interior minimum at 0.13), all global params interior

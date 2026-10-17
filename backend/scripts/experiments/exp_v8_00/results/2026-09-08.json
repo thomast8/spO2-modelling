@@ -44,7 +44,8 @@
    "r2a_stage_b": 0.33319767235327147,
    "r2n_stage_b": 0.8457354123122804,
    "nadir_err_stage_b": 0.0,
-   "nadir_spo2_err_stage_b": 2.141197283763816
+   "nadir_spo2_err_stage_b": 2.141197283763816,
+   "rmse_apnea_stage_b": 1.427092191341242
   }
  ]
 }

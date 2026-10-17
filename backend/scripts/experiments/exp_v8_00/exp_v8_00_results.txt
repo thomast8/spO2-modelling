@@ -18,55 +18,110 @@ across sessions and devices, or was v7 a curve fit to 21 February 2026?
 Two sources, two oximeters, one subject.
 
   21 February 2026  STAmina CSV, Masimo MightySat (finger), the session v7 was built on.
-  29 September 2026 Nadir full Export (app 0.4.0.54, formatVersion 1), 12 sessions from
-                    20 August to 29 September. The oximeter is not recorded in the export
-                    (Nadir #439 is open); these sessions are presumably the Medisana PM100.
+  17 October 2026   Nadir full Export (app 0.10.5.99, formatVersion 3), 48 sessions from
+                    4 March to 16 October. Thomas sent it after a first pass on the
+                    29 September export (12 sessions, 15 SpO2 holds, 10 usable); its 15 SpO2
+                    holds load identically from both, so the September fits were kept.
+
+The export does not record which oximeter a session used (Nadir #439 is open). It does
+carry one piece of provenance: sessions tagged `imported, stamina` were rebuilt from a
+STAmina export, so STAmina and the Masimo recorded them, and their lung-volume label is
+the importer's default (`full`, `StaminaImport.kind(for:)`), not what the diver did. The
+other sessions were recorded by the app on its connected oximeter, presumably the Medisana
+PM100.
 
 The handoff for this work assumed "months of recorded holds". The export has:
 
-  sessions                          12
-  performed holds                   53   (47 full, 6 RV, 0 FRC, 0 packed)
-  holds with any SpO2               15   (five sessions, 2 to 18 September)
-  holds passing v7's QC             10   (7 full, 3 RV, 0 FRC) in four sessions
-  holds reaching SpO2 < 85 %         9
-  RR intervals, pack counts,
-  max-attempt flags, effort          0   (none recorded in these sessions)
+  sessions                          48   (13 with any SpO2)
+  performed holds                  229   (201 full, 23 RV, 5 packed, 0 FRC, 0 unlabelled)
+  holds with any SpO2               61   (38 full, 20 RV, 3 packed)
+  holds passing v7's QC             36   (18 full, 18 RV, 0 FRC) in nine sessions
+    of which STAmina-recorded       10   (6 and 8 August, lung volume unknown)
+    of which app-recorded           26   (8 full, 18 RV; 2 September to 16 October)
+  holds reaching SpO2 < 85 %        27   (of the 36)
+  packed holds                       3   (v7 has no bounds for packed; skipped)
+  max-attempt flags                 22   (all October, all `false`), pack counts 4, RR intervals 0
 
-Inventory of the 15 SpO2 holds (dur = hold length, nadir/range over the apnea window,
-fill = share of 1 Hz samples that had to be interpolated, gap = longest run of missing
-seconds, rec = seconds of trace after the hold, contr = contraction marks):
+Inventory of the 58 SpO2 holds v7 can label (dur = hold length, nadir/range over the apnea
+window, fill = share of 1 Hz samples that had to be interpolated, gap = longest run of
+missing seconds, rec = seconds of trace after the hold, contr = contraction marks):
 
-  hold              dur nadir range  fill  gap  rec contr  qc
-  2026-09-02-FL1    300    84    15    7%   21   42     1  ok
-  2026-09-02-FL2    312    80    19    6%   17    5     1  ok
-  2026-09-04-RV1     90    85    15    2%    2   43     0  ok
-  2026-09-04-RV2    125    77    23    6%    5   54     0  ok
-  2026-09-04-RV3    149    63    37    2%    2   43     0  ok
-  2026-09-04-FL4    309    88    12    8%   18   40     1  ok
-  2026-09-04-FL5    332    82    18    1%    2   20     1  ok
-  2026-09-05-FL1    301    82    17    4%   11   31     1  ok
-  2026-09-05-FL2    332    75    24    4%   11   20     1  ok
-  2026-09-08-FL1    150    97     2   11%   16    5     0  range < 5%
-  2026-09-08-FL2    150    94     5    0%    1   51     1  nadir 120s before end
-  2026-09-08-FL3    150    91     8    0%    1   60     1  ok
-  2026-09-08-FL4    149    89    10    0%    1   69     1  nadir 148s before end
-  2026-09-08-FL5    150    84    14    0%    1    0     1  nadir 37s before end
-  2026-09-18-FL1    302    81    18   34%  102   34     1  34% of samples filled
+  hold              dur nadir range  fill  gap  rec contr  source          qc
+  2026-03-04-FL1        225    98     2   10%   22    5     1  stamina-import  range < 5%
+  2026-03-04-FL2        225    98     2    8%   14    5     1  stamina-import  range < 5%
+  2026-03-04-FL3        225    97     3    8%   16    5     0  stamina-import  range < 5%
+  2026-03-04-FL4        225    98     2   10%   18    5     0  stamina-import  range < 5%
+  2026-08-06-FL1         65    95     4    0%    1   32     0  stamina-import  range < 5%
+  2026-08-06-FL2         78    91     8    3%    2   31     0  stamina-import  ok
+  2026-08-06-FL3         81    88    11    4%    2   34     0  stamina-import  ok
+  2026-08-06-FL4        102    80    19    4%    2   30     0  stamina-import  ok
+  2026-08-06-FL5        122    70    29    2%    2   36     0  stamina-import  ok
+  2026-08-06-FL6        137    63    36    1%    2   46     0  stamina-import  ok
+  2026-08-06-FL7        132    67    32    0%    1   37     0  stamina-import  ok
+  2026-08-06-FL8        138    58    41    1%    2   33     0  stamina-import  ok
+  2026-08-06-FL9        321    79    21   11%   32    0     1  stamina-import  ok
+  2026-08-08-FL1         95    97     2   28%   26    5     1  stamina-import  range < 5%
+  2026-08-08-FL2        136    98     1   15%   18    5     0  stamina-import  range < 5%
+  2026-08-08-FL3        162    96     3   10%   16    5     0  stamina-import  range < 5%
+  2026-08-08-FL4        199    93     6   13%   23   42     0  stamina-import  nadir 165s before end
+  2026-08-08-FL5        207    94     5   11%   22   40     0  stamina-import  ok
+  2026-08-08-FL6        284    85    14   13%   34   41     1  stamina-import  ok
+  2026-09-02-FL1        300    84    15    7%   21   42     1  nadir           ok
+  2026-09-02-FL2        312    80    19    6%   17    5     1  nadir           ok
+  2026-09-04-RV1         90    85    15    2%    2   43     0  nadir           ok
+  2026-09-04-RV2        125    77    23    6%    5   54     0  nadir           ok
+  2026-09-04-RV3        149    63    37    2%    2   43     0  nadir           ok
+  2026-09-04-FL4        309    88    12    8%   18   40     1  nadir           ok
+  2026-09-04-FL5        332    82    18    1%    2   20     1  nadir           ok
+  2026-09-05-FL1        301    82    17    4%   11   31     1  nadir           ok
+  2026-09-05-FL2        332    75    24    4%   11   20     1  nadir           ok
+  2026-09-08-FL1        150    97     2   11%   16    5     0  nadir           range < 5%
+  2026-09-08-FL2        150    94     5    0%    1   51     1  nadir           nadir 120s before end
+  2026-09-08-FL3        150    91     8    0%    1   60     1  nadir           ok
+  2026-09-08-FL4        149    89    10    0%    1   69     1  nadir           nadir 148s before end
+  2026-09-08-FL5        150    84    14    0%    1    0     1  nadir           nadir 37s before end
+  2026-09-18-FL1        302    81    18   34%  102   34     1  nadir           34% of samples filled
+  2026-10-02-RV1         74    93     6    0%    1   29     0  nadir           ok
+  2026-10-02-FL2        120    84    15   35%   42    5     0  nadir           nadir 116s before end
+  2026-10-02-RV3         77    82    17    3%    2   67     0  nadir           ok
+  2026-10-02-FL4        132    76    23    1%    2   34     1  nadir           nadir 123s before end
+  2026-10-02-RV5        105    81    18    0%    1   53     1  nadir           ok
+  2026-10-02-FL6        130    70    30    0%    1   29     1  nadir           nadir 122s before end
+  2026-10-02-RV7        101    81    18    0%    1   23     1  nadir           ok
+  2026-10-02-FL8        142    73    27   35%   44   32     1  nadir           nadir 136s before end
+  2026-10-02-RV9         93    81    19    0%    1   19     1  nadir           ok
+  2026-10-02-FL10       143    79    20   38%   53    6     1  nadir           nadir 142s before end
+  2026-10-04-FL2         39    99     0    0%    1    0     0  nadir           range < 5%
+  2026-10-12-RV1         57    99     1    3%    2    5     0  nadir           range < 5%
+  2026-10-12-RV2         82    99     1    0%    1    5     0  nadir           range < 5%
+  2026-10-12-RV3         90    79    21    0%    1   59     0  nadir           ok
+  2026-10-12-RV4        120    77    22    2%    2   52     1  nadir           ok
+  2026-10-12-RV5        128    70    29    2%    2   55     1  nadir           ok
+  2026-10-12-RV6        139    54    45    1%    2   49     1  nadir           ok
+  2026-10-12-FL7        345    70    29    1%    2    7     1  nadir           ok
+  2026-10-16-RV1         60    92     7    5%    2   58     0  nadir           ok
+  2026-10-16-RV2         91    80    19    0%    1   47     1  nadir           ok
+  2026-10-16-RV3        113    76    23    3%    2   43     1  nadir           ok
+  2026-10-16-RV4        127    58    41    1%    2   43     1  nadir           ok
+  2026-10-16-RV5        138    46    54    1%    2   50     1  nadir           ok
+  2026-10-16-RV6        159    42    58    1%    2   30     3  nadir           ok
 
 The February session through the same loader (hold numbers as in the v7 spec):
 
-  2026-02-21-FL1    180    96     3    7%   12    4     0  range < 5%        (v7 excluded)
-  2026-02-21-FRC2   135    88    11    2%    2   48     0  ok                (v7 flagged)
-  2026-02-21-RV3    130    61    39    3%    2   49     0  ok
-  2026-02-21-RV4    242    40    60    1%    2   56     0  nadir 67s before end (v7 excluded)
-  2026-02-21-FRC5   188    54    46    2%    2   60     0  ok
-  2026-02-21-FL6    373    57    43    3%    6   38     0  ok
+  2026-02-21-FL1        180    96     3    7%   12    4     0  stamina         range < 5%
+  2026-02-21-FRC2       135    88    11    2%    2   48     0  stamina         ok
+  2026-02-21-RV3        130    61    39    3%    2   49     0  stamina         ok
+  2026-02-21-RV4        242    40    60    1%    2   56     0  stamina         nadir 67s before end
+  2026-02-21-FRC5       188    54    46    2%    2   60     0  stamina         ok
+  2026-02-21-FL6        373    57    43    3%    6   38     0  stamina         ok
+
+  FL1 and RV4 are the two holds v7 excluded; FRC2 is the one it flagged and kept.
 
 Loader decisions, all forced by v7's code rather than chosen:
 
   - v7's Stage B convolves the trace with the gamma kernel as an array, so it needs a
     complete 1 Hz grid. Dropouts and samples without skin contact are filled by linear
-    interpolation. Every long gap in the September holds (11 to 21 s) sits in the first
+    interpolation. Every long gap in the app-recorded holds (11 to 21 s) sits in the first
     25 s of the hold on the 98-100 % plateau, where interpolation changes nothing. The
     one hold where the gap crosses the descent (18 September, 102 s without contact) is
     excluded.
@@ -77,7 +132,8 @@ Loader decisions, all forced by v7's code rather than chosen:
     coverage rules were added for the Nadir data: more than 20 % of samples filled, or a
     gap longer than 10 s below 95 %, excludes the hold. v7 itself trained on FL#6 with a
     6 s gap near its nadir, so the line is above that.
-  - Nadir `full` maps to v7 FL, `rv` to RV. There are no FRC and no packed holds.
+  - Nadir `full` maps to v7 FL, `rv` to RV. There are no FRC holds. `packed` is skipped:
+    v7 has no bounds for it.
 
 Hold windows differ slightly from v7's own: the CSV's Apnea interval for FRC#2 is 135 s
 where the v7 database had 132, because the app's parser trimmed rows the loader keeps.
@@ -88,60 +144,102 @@ one, and that is the point: the same code on the same session through a second l
 2. THINGS THE DATA SAYS BEFORE ANY FITTING
 ------------------------------------------
 
-  - The post-hold window is short. Nadir's recovery breathe step is 20 s, and after the
-    last hold of a session the trace ends with it. On 4 and 5 September the max holds end
-    with SpO2 still falling (76 % and 71 % at the last sample). The nadir of the longest
-    holds is not in the data. The cooldown after the last hold that Nadir has since added
-    fixes this for future sessions.
+  - The 6 August "full" holds are not full-lung holds. Eight holds of 65 to 138 s reach
+    58 % SpO2, which is RV behaviour (the 16 October RV table reaches 42 % at 159 s; the
+    September full-lung holds need 300 s to reach 80 %). The label is the STAmina
+    importer's default. The session's own lung volumes are unknown, so its fit is kept as
+    a labelled example of what v7 does when the type bounds are wrong, not as evidence
+    about full-lung physiology.
+  - The 2 October session ("True tidal breathing") alternates an RV hold with a full-lung
+    hold seven seconds later, with no recovery between them. The full-lung holds start at
+    79 to 89 % with the reading still falling from the RV hold before, so their apnea-
+    window minimum is at the start and v7's QC drops all five ("nadir N s before end").
+    That is the right outcome for a model that assumes a settled baseline, and a protocol
+    v8 would have to represent explicitly (initial state carried over from the last hold).
+  - The post-hold window is short. Nadir's recovery breathe step was 20 s (now 6 s), and
+    after the last hold of a session the trace ends with it. On 4 and 5 September the
+    max holds end with SpO2 still falling (76 % and 71 % at the last sample); on 12 October
+    the 345 s full-lung hold has 7 s of trace after it. The nadir of the longest holds is
+    not in the data. Where a calm-breathe step follows the recovery step, the loader's
+    stitching recovers 30 to 60 s, which is why the RV tables fare better.
   - Lag is visibly different per hold on the same device: nadir 1 s after the end of
     2026-09-05-FL1, 10 s after FL2 the same evening, 29 s after 2026-09-02-FL1. v7's
     per-hold delta_h existed for this; the spread here (-16 to +20 s, see below) is far
     wider than February's (-8 to +7 s).
-  - Readings hold flat for 10 to 20 s after the end of a hold, then step. The PM100 (if
-    that is what recorded these) behaves differently from the MightySat around the nadir.
-    This is the device-specific sensor model the handoff asks for, and it cannot be
-    separated from physiology with one device per session and no provenance.
+  - Readings hold flat for 10 to 20 s after the end of a hold, then step. The app-recorded
+    traces behave differently from the MightySat ones around the nadir. This is the
+    device-specific sensor model the handoff asks for, and with the device unrecorded it
+    cannot be separated from the finger, the diver's movement or the app's sampling.
   - The 8 September session is a CO2 table (five 150 s holds). SpO2 barely moves in four
     of them and v7's QC drops them. CO2 tables are not desaturation data.
-  - No session has FRC holds. v7's FRC bound was its load-bearing constraint; there is
-    nothing here to test it against.
+  - RV is now the best-covered lung volume: 18 app-recorded RV holds in four sessions, 60
+    to 159 s, nadirs 42 to 93 %. Full-lung has 8 app-recorded holds, most of them 300 s
+    or longer with the nadir cut off. No session has FRC holds. v7's FRC bound was its
+    load-bearing constraint; there is nothing here to test it against.
+  - Six traces go below 50 % and 16 below 70 %, the floor of the range finger
+    oximeters are validated for. They are kept and flagged in the inventory by their
+    nadir; nothing below reads them as physiology.
 
 
 3. REFIT RESULTS
 ----------------
 
-One Stage A + Stage B fit per group with v7.08's shipping configuration (DE popsize 40 /
+One Stage A + Stage B fit per session with v7.08's shipping configuration (DE popsize 40 /
 maxiter 4000 for Stage A, 25 / 2000 for Stage B, seed 42, same priors, same bounds).
-"pool-nadir" fits every QC-passing September hold together: one tau_0, p, k_co2 and
-gamma for the whole month, which is what a transferable model would need.
 
-  group               holds   pts  tau_0     p   k_co2  gamma    R2a  bound hits
-  v7.08 (published)       4   800  17.68  3.39  0.1385  1.863  0.972  tau_w FRC x2, paco2_0 RV3
-  2026-02-21              4  1021  17.68  3.40  0.1505  1.853  0.968  tau_w FRC2, tau_w FRC5, paco2_0 RV3
-  2026-09-02              2   659  20.92  4.22  0.0200  2.507  0.899  k_co2 (lower), paco2_0 FL1 (upper)
-  2026-09-04              5  1210  30.52  3.08  0.0607  1.991  0.957  paco2_0 FL5 (upper), delta FL5 (+20)
-  2026-09-05              2   685   6.55  4.54  0.0996  2.426  0.954  -
-  2026-09-08              1   210  21.69  5.00  0.0891  1.572  0.333  p (upper)
-  pool-nadir             10  2764      running at the time of writing; see results/pool-nadir.json
+3.1 Free fits: every parameter refitted per session
 
-  R2a = mean Stage B R-squared on the apnea window, v7's primary metric. 2026-09-18 has
-  no row: its one hold failed QC.
+  group               holds   pts  tau_0     p   k_co2  gamma    R2a  RMSEa  bound hits
+  v7.08 (published)       4   800  17.68  3.39  0.1385  1.863  0.972      -  tau_w FRC x2, paco2_0 RV3
+  2026-02-21              4  1021  17.68  3.40  0.1505  1.853  0.968   1.53  tau_w FRC2, FRC5; paco2_0 RV3
+  2026-08-06 (STAmina)    8  1358  25.98  2.28  0.0200  1.779  0.964   0.90  k_co2 (lower); tau_w lower x4; paco2_0 FL9 (lower)
+  2026-08-08 (STAmina)    2   572  39.07  3.17  0.0846  1.699  0.347   1.36  -
+  2026-09-02              2   659  20.92  4.22  0.0200  2.507  0.899   1.45  k_co2 (lower); paco2_0 FL1 (upper)
+  2026-09-04              5  1210  30.52  3.08  0.0607  1.991  0.957   1.14  paco2_0 FL5 (upper); delta FL5 (+20)
+  2026-09-05              2   685   6.55  4.54  0.0996  2.426  0.954   1.13  -
+  2026-09-08              1   210  21.69  5.00  0.0891  1.572  0.333   1.43  p (upper)
+  2026-10-02              5   649  12.34  2.20  0.0200  1.159  0.941   1.04  k_co2 (lower); paco2_0 RV1, RV7 (lower)
+  2026-10-12              5  1052  29.14  3.22  0.0200  2.379  0.922   2.29  k_co2 (lower); paco2_0 FL7 (upper); delta FL7 (+20)
+  2026-10-16              6   971  20.11  2.26  0.1447  1.608  0.937   2.15  tau_w RV3, RV4 (upper); paco2_0 RV2 (upper)
 
-Per-hold Stage A sensor lag (tau_0 + delta_h) and Stage B washout, seconds:
+  R2a = mean Stage B R-squared on the apnea window, v7's primary metric; RMSEa = mean
+  per-hold RMSE on the same window, in SpO2 points. 2026-03-04, 2026-09-18, 2026-10-04
+  and 2026-10-07 have no row: no hold passed QC (the last two are one 39 s hold below the
+  range rule and two packed holds). The 2026-08-06 row is fitted with the importer's
+  "full" labels and the FL bounds; four of its tau_washout sit at the FL lower bound of
+  50 s (see section 2).
 
-  hold               lag  tau_w  paco2_0  R2a(B)   hold               lag  tau_w  paco2_0  R2a(B)
-  02-21 FRC2        15.3    100*    37.4   0.931   09-04 RV1         19.2     47     41.9   0.973
-  02-21 RV3          9.6     52     30.0*  0.982   09-04 RV2         33.2     49     39.2   0.991
-  02-21 FRC5        20.6    100*    38.0   0.976   09-04 RV3         19.4     50     35.0   0.975
-  02-21 FL6         25.2    408     42.4   0.981   09-04 FL4         30.3    321     45.6   0.926
-  09-02 FL1         36.8    212     50.0*  0.870   09-04 FL5         50.5    321     50.0*  0.918
-  09-02 FL2          5.0f   212     47.5   0.928   09-05 FL1          5.0f   381     46.5   0.941
-  09-08 FL3         21.7    193     45.0   0.333   09-05 FL2          8.1    381     46.7   0.968
+  A pooled fit of all app-recorded holds under one set of globals was started on the
+  29 September data and abandoned: at v7's optimiser settings a 10-hold Stage A is 32
+  parameters and runs for hours, and with 26 holds it is not feasible. Section 3.2 answers
+  the same question more directly.
 
-  * at a bound   f at the 5 s effective-lag floor
+3.2 Transfer: February's four globals frozen, only per-hold parameters refitted
 
-Per-hold detail is in results/<group>.json; the plots in results/<group>.png show the
-observed trace with the Stage A (sensor) and Stage B (physiology) predictions.
+  This is the v7 spec's own "Priority 2" test (tau_0, p from Stage A and k_co2, gamma from
+  Stage B pinned at the February values; delta_h, S_min, v_up, tau_washout, paco2_0 free).
+  If the globals mean anything, pinning them to another session's values should cost fit.
+  Note what stays free: delta_h at +-20 s means the effective lag can still run from 5 to
+  38 s with tau_0 pinned, and S_min and v_up are Stage A's own shape. The pinned values
+  that bear on the Stage B apnea-window score are k_co2 and gamma; this table tests those
+  two, not the sensor stage.
+
+  session        n   R2a free  frozen   RMSE free  frozen   |nadir err|   tau_washout free -> frozen (type)
+  2026-08-06    8      0.964   0.817        0.90    2.11          5.3   50 50* 50* 50* 50 51 50* 58 -> 114 113 110 96 101 108 102 178 (FL labels)
+  2026-08-08    2      0.347   0.288        1.36    1.40          1.0   328 328 -> 500* 500* (FL)
+  2026-09-02    2      0.899   0.896        1.45    1.46          1.0   212 212 -> 414 414 (FL)
+  2026-09-04    5      0.957   0.957        1.14    1.16          1.9   47 49 50 -> 76 78 78 (RV); 321 321 -> 500* 500* (FL)
+  2026-09-05    2      0.954   0.953        1.13    1.14          0.8   381 381 -> 352 352 (FL)
+  2026-09-08    1      0.333   0.315        1.43    1.45          2.0   193 -> 297 (FL)
+  2026-10-02    5      0.941   0.918        1.04    1.48          4.1   43 39 43 43 42 -> 80* 79 80* 80* 80* (RV)
+  2026-10-12    5      0.922   0.911        2.29    2.38          3.9   47 52 51 49 -> 64 70 69 65 (RV); 191 -> 403 (FL)
+  2026-10-16    6      0.937   0.934        2.15    2.14          3.9   77 77 80* 80* 74 77 -> 79 79 80* 80* 79 80* (RV)
+
+  RMSE in SpO2 points on the apnea window, mean over holds; |nadir err| = mean absolute
+  error of the predicted nadir SpO2 under frozen globals. * at a bound. Per-hold detail for
+  every fit is in results/<group>.json and results/transfer-<group>.json; the plots in
+  results/*.png show the observed trace with the Stage A (sensor) and Stage B (physiology)
+  predictions.
 
 
 4. WHAT THE REFIT SHOWS
@@ -158,58 +256,76 @@ observed trace with the Stage A (sensor) and Stage B (physiology) predictions.
      itself a finding about k_co2. Everything below is therefore about the data, not the
      code.
 
-  2. The sensor lag does not hold. tau_0 is 17.7 s in February and 6.6, 20.9, 21.7 and
-     30.5 s across four September sessions on, presumably, one device. Per-hold deltas
-     that sat within -8 to +7 s in February now hit the +20 s bound (4 September FL5,
-     effective lag 51 s) or sit at +-15.9 s with the zero-sum prior holding them
-     symmetric (2 September). Two holds are pinned at the 5 s floor. A 51 s "lag" is
-     not circulation time; it is the sensor model absorbing a trace shape the latent
-     template cannot make.
+  2. The globals drift. Refitted per session, tau_0 is 6.6 to 39.1 s (17.7 in February),
+     k_co2 sits at its 0.02 lower bound in four of nine Nadir sessions and at 0.145 in
+     another, gamma runs 1.16 to 2.51. p hits its upper bound once. None of this is
+     within the spread v7 called "identified".
 
-  3. k_co2 is not a constant of this diver. February 0.139 (0.151 here), then 0.020 at
-     the lower bound (2 September), 0.061, 0.100, 0.089 mmHg/s: 1.2 to 9 mmHg/min. gamma
-     moves with it (2.51, 1.99, 2.43, 1.57), the trade-off the v7 spec documented in its
-     own k_co2 profile. The spec called k_co2 an effective parameter; this is what that
-     looks like once there is a second session.
+  3. The globals do not matter. Freezing all four at February's values and refitting only
+     the per-hold parameters changes the apnea-window R2a by less than 0.025 on every
+     app-recorded session with real desaturation (table 3.2). The per-hold tau_washout
+     absorbs the difference: RV washout goes 42 to 80 s (the bound) on 2 October and
+     full-lung 321 to 500 s (the bound) on 4 September to make room for February's faster
+     CO2 rise. The one session that does lose fit (6 August, -0.15, every paco2_0 at a
+     bound) is the STAmina import fitted under its mislabelled full-lung bounds, where the
+     per-hold knobs run out of room; that is the labels failing, not a global being
+     identified. Items 2 and 3 together are the diagnosis: the globals wander because the data cannot pin
+     them, and the data cannot pin them because every hold has two free knobs of its own.
+     v7's k_co2 profile had an interior minimum only because the FRC bound held the FRC
+     holds' tau_washout at 100 s. There are no FRC holds here, and nothing else holds it.
 
-  4. Stage A is fragile at two holds per session. On 5 September the sensor stage put
-     FL1 at S_min 97 %, v_up 2.8 %/s and lag at the floor (R2a -0.05) while Stage B fits
-     the same hold at 0.94. On 2 September v_up is at its 3 %/s bound on both holds. Eight
-     parameters against two holds with 5 to 31 s of recovery is not identified, and the
-     nadir-timing penalty has nothing to grip when the nadir is not in the trace.
+  4. The sensor lag is not a lag. Per-hold deltas sat within -8 to +7 s in February; here
+     they sit at or within 0.1 s of the +20 s bound on the longest full-lung hold of three
+     sessions (effective lag 46 to 51 s) and two holds sit at the 5 s floor. The app-recorded traces hold flat
+     at a value for 10 to 20 s and then step 5 to 13 points, in every RV table and after
+     most holds where the trace continues (results/2026-10-16.png shows six in a row). A gamma kernel smooths; it
+     cannot hold and step. The inflated lags are Stage A stretching the kernel to cover a
+     staircase. This is the per-device sensor model the handoff asks for, and with the
+     device unrecorded it cannot be attributed to the oximeter rather than the finger,
+     the diver's movement or the app's sampling.
 
-  5. Stage B still describes the apnea window, as a curve fit does. For holds of 125 s
-     and more, apnea-window R2a is 0.87 to 0.99, with per-hold tau_washout and paco2_0
-     free. Full-lung tau_washout is 212, 321 and 381 s on three September evenings
-     against 408 s in February; RV is 47 to 50 s against 52 s. paco2_0 sits at its 50
-     mmHg upper bound on two full-lung holds. Nothing here is a parameter you could carry
-     into a hold you have not seen.
+  5. Stage A is fragile. With two holds per session it put 2026-09-05-FL1 at S_min 97 %,
+     v_up 2.8 %/s and lag at the floor (R2a -0.05) while Stage B fits the same hold at
+     0.94; v_up is at its 3 %/s bound on five holds in four sessions. On the RV
+     tables the latent template misses the staircase (2026-10-16-RV2: Stage A 0.57, Stage
+     B 0.92). Eight to twenty parameters against 2 to 8 holds with 5 to 60 s of recovery
+     is not identified, and the nadir-timing penalty has nothing to grip when the nadir
+     is not in the trace.
 
-  6. The September traces show a device behaviour the model has no term for. After the
-     hold ends the reading stays flat at its end-of-hold value for 10 to 20 s, then steps
-     (RV1 and RV2 on 4 September: flat, then a 10 to 13 point drop; FL4: flat, then down
-     14 points, then up). A gamma kernel smooths; it cannot hold and step. This is where
-     the inflated lags in item 2 come from, and it is the per-device sensor model the
-     handoff asks for. With no device recorded on the session it cannot be attributed to
-     the oximeter rather than to the finger, the diver's movement or the app's sampling.
+  6. Stage B still describes the apnea window, as a curve fit does. Sessions whose holds
+     reach below 85 % fit at R2a 0.90 to 0.96 with per-hold tau_washout and paco2_0 free.
+     RV washout by session: 42, 48, 50, 77 s (February 52); full-lung: 191, 212, 321,
+     381 s (February 408). paco2_0 sits at a bound on eight holds in seven sessions, at
+     both ends (20 and 30 at the bottom, 50 and 55 at the top). Nothing here is a parameter
+     you could carry into a hold you have not seen.
 
-  7. v7 does not apply below about 120 s, as its spec says: the one 150 s CO2-table hold
-     that passed QC fits at R2a 0.33 with p at its bound.
+  7. Labels matter more than physiology for the type bounds. The 6 August STAmina
+     session, fitted with the importer's "full" labels, puts four of eight tau_washout at
+     the full-lung lower bound of 50 s and its 321 s hold's paco2_0 at the 20 mmHg lower
+     bound. Those holds desaturate like RV holds and the bounds say so.
+
+  8. v7 does not apply below about 120 s of hold or above about 90 % nadir, as its spec
+     says: the shallow 8 August and 8 September holds fit at R2a 0.29 to 0.35.
 
 
 5. VERDICT
 ----------
 
 v7.08 is confirmed as what its own spec feared: a curve fit with diagnostics, not a
-model. Refitted session by session, every global parameter moves well outside the
-spread v7 called "identified": sensor lag 6.6 to 30.5 s, k_co2 0.02 to 0.15 mmHg/s,
-gamma 1.6 to 2.5. The apnea-window fit quality survives because the per-hold parameters
-absorb the differences, which is the definition of not transferring.
+model. Across ten sessions and two oximeters every global parameter moves well outside
+the spread v7 called "identified", and pinning all four to another session's values
+costs nothing on the app-recorded sessions, because the per-hold parameters do the work. The apnea-window fit quality
+survives both ways, which is the definition of a model that does not transfer and cannot
+be falsified by this data.
 
-The baseline v8 has to beat is therefore not "mean R2a 0.97 in sample". It is: fit the
-globals on all sessions but one and report the held-out session's apnea-window RMSE and
-nadir error. The per-session fits here are the numbers that baseline will be compared
-against; the pooled fit, when it finishes, gives the single-parameter-set version.
+The baseline v8 has to beat is therefore not "mean R2a 0.97 in sample", and not even the
+free per-session rows in 3.1. It is table 3.2: on held-out app-recorded sessions with
+February's globals carried over and two free parameters per hold, apnea-window RMSE of
+1.1 to 2.4 SpO2 points and a nadir SpO2 error of 1 to 4 points (R2a 0.90 to 0.96). A v8 that
+earns its place has to match that with no per-hold free parameters, or with per-hold
+parameters that are predicted from things Nadir records (lung volume, pack count,
+breathe-up, time since the last hold) rather than fitted. The honest metric is held-out
+apnea-window RMSE and nadir error, which is why both are tabulated, not R2a.
 
 What survives from v7 for v8: the Severinghaus ODC and alveolar gas set-up, the sensor /
 physiology separation as a hypothesis to test inside one model rather than as two fits,
@@ -217,24 +333,28 @@ and the habit of writing the success criteria before the fit. What does not: the
 per-hold free parameters, the lambda priors, the lag-as-gamma-kernel sensor model, and
 any claim about k_co2.
 
-No v8 modelling is started in this experiment, on purpose. Ten usable holds in four
-sessions, two lung volumes, no FRC, no device provenance and no captured nadir on the
-max holds do not support a hierarchical model, and fitting one would only reproduce
-v7's mistake with more parameters.
+No v8 modelling is started in this experiment, on purpose. Thirty-six usable holds in
+nine sessions is enough to start, but two lung volumes, no FRC, no device provenance,
+unreliable labels on the STAmina imports and no captured nadir on the max holds mean the
+first v8 step is a sensor model for the app-recorded traces and a lung-volume contrast
+that exists in the data, not a hierarchical physiology model.
 
 
 6. DATA NEEDED BEFORE V8 WORK CAN START
 ---------------------------------------
 
-Everything in the v8 direction that needs lung-volume contrast, a sensor model per device
-or partial pooling across sessions is blocked on data that does not exist yet. In order:
+The fresh export answered the first request. What is still missing, in order:
 
-  1. A fresh Nadir Export through today. The one on disk stops on 29 September.
-  2. Which oximeter recorded each session. The export does not say. If the September
-     sessions mixed devices, nothing above can be interpreted.
+  1. Which oximeter recorded the app sessions (2 September onwards). The export does not
+     say. The STAmina imports are Masimo by construction; the rest are presumably the
+     PM100. If any app session used another device, nothing above can be interpreted.
+  2. What lung volume the 6 August holds really were. The importer labelled them full;
+     the traces say exhale. A one-line answer fixes nine holds.
   3. FRC holds, or confirmation that FRC is not part of the training. v7's structure
-     depends on FRC; v8 needs at least one lung-volume contrast besides full vs RV.
-  4. Sessions recorded with the post-last-hold cooldown on, so the nadir is captured.
+     depends on FRC; v8 needs at least one lung-volume contrast besides full vs RV, and
+     the packed holds (three so far) are the other candidate.
+  4. The post-last-hold cooldown on, so the nadir of the max holds is in the trace. The
+     12 October 345 s hold has 7 s after it.
   5. Any measured lung volumes (FVC from Health, lab TLC/RV) and body mass, for the
      mechanistic model's inputs. Not needed for the baseline, needed before v8.
 

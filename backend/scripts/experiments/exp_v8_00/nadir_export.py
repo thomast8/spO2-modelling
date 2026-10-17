@@ -85,6 +85,11 @@ def load_nadir(path):
     for session in sorted(data["sessions"], key=lambda s: s["startedAt"]):
         day = session["startedAt"][:10]
         steps = session["steps"]
+        # A session Nadir rebuilt from a STAmina export was recorded by STAmina (Masimo
+        # MightySat), not by the app and its connected oximeter. It is the only device
+        # provenance the export carries, and its lung-volume labels are the importer's
+        # default (`full`), not the diver's.
+        imported = {"imported", "stamina"} <= set(session.get("tags", []))
         k = 0
         for i, step in enumerate(steps):
             if step.get("kindName") != "hold" or step.get("actualDuration", 0) <= 0:
@@ -150,7 +155,7 @@ def load_nadir(path):
                     hr_rec,
                     {
                         "session": day,
-                        "source": "nadir",
+                        "source": "stamina-import" if imported else "nadir",
                         "duration": duration,
                         "planned": step.get("plannedDuration"),
                         "outcome": outcome,
@@ -285,7 +290,7 @@ def load(path):
 def inventory(holds):
     print(
         f"{'hold':<20}{'dur':>5} {'nadir':>5} {'range':>5} {'fill':>5} {'gap':>4} "
-        f"{'rec':>4} {'contr':>5}  qc"
+        f"{'rec':>4} {'contr':>5}  {'source':<15} qc"
     )
     for h in holds:
         m = h["meta"]
@@ -293,7 +298,8 @@ def inventory(holds):
         print(
             f"{h['id']:<20}{m['duration']:>5.0f} {h['spo2_apnea'].min():>5.0f} "
             f"{h['spo2_apnea'].max() - h['spo2_apnea'].min():>5.0f} {m['missing_frac']:>5.0%} "
-            f"{m['max_gap']:>4.0f} {m['recovery_s']:>4.0f} {m['contractions']:>5}  {reason or 'ok'}"
+            f"{m['max_gap']:>4.0f} {m['recovery_s']:>4.0f} {m['contractions']:>5}  "
+            f"{m['source']:<15} {reason or 'ok'}"
         )
     kept = [h for h in holds if qc(h) is None]
     by_type = {t: sum(1 for h in kept if h["type"] == t) for t in ("FL", "FRC", "RV")}
