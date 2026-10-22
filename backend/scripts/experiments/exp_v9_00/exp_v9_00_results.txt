@@ -1,0 +1,359 @@
+v9.00 Results: the learning framework's priors, gates and forward chain on one diver
+====================================================================================
+
+Date: 2026-10-22
+Script:  backend/scripts/experiments/exp_v9_00/evaluate.py (emit_swift.py, emit_fixtures.py)
+Inputs:  Nadir full Export nadir-export-2026-10-17.json (48 sessions after dedupe), the 21 February 2026
+         STAmina CSV rebuilt as StaminaImport would, NHANES 2007-2012 (SPX, DEMO, BMX, SMQ, MCQ).
+Contract: learning-contract.md v1 with §10 v2 and §16 (22 October). Time zone for §9: Europe/London.
+Labels: the 6 August 2026 relabel (holds 1-8 RV, hold 9 full) is applied as styleSource "confirmed".
+
+Question: what does every learned quantity in the plan look like on Thomas's own recordings,
+which of them pass the evidence gate today, and what does each waiting one still need?
+
+
+1. POST-HOLD DELAY PER OXIMETER (contract §3, §4)
+--------------------------------------------------
+
+Recovery onset per hold: the first trusted SpO₂ reading 2 points above the post-hold minimum,
+counted from after the last time that minimum is reached, walking every step up to the next
+performed hold. One row per session: its mean onset.
+
+Prior (data-informed, kappa0 = 2): mu0 = 36.4 s (mean of all session means), between-session sd
+9.9 s pooled within oximeter, alpha0 = 2, beta0 = 97.8. Prior 80 % interval on the mean:
+28.8 to 43.9 s.
+
+  stamina: sessions with SpO₂ and this key
+    session      mean onset  holds censored
+    2026-02-21       35.2 s      6        0
+    2026-03-04       52.2 s      4        0
+    2026-08-06       26.5 s      8        0
+    2026-08-08       37.0 s      5        0
+    (26 more sessions with this key have no post-hold SpO₂)
+    posterior on the mean: 37.3 s, 80 % 32.6 to 42.0 s (df 8), n = 4 sessions, 23 holds, 0 censored
+    narrowing against the prior: 0.38
+    leave-one-session-out 80 % predictive coverage: 2/4 (50%)
+      2026-02-21   35.2 s in [ 24.0,  51.5]  yes
+      2026-03-04   52.2 s in [ 24.9,  42.7]  NO
+      2026-08-06   26.5 s in [ 28.3,  51.2]  NO
+      2026-08-08   37.0 s in [ 23.4,  51.2]  yes
+
+  pm100: sessions with SpO₂ and this key
+    session      mean onset  holds censored
+    2026-09-02       38.0 s      1        1
+    2026-09-04       47.5 s      4        1
+    2026-09-05       27.0 s      1        1
+    2026-09-08       40.0 s      3        1
+    2026-09-18       26.0 s      1        0
+    2026-10-02       31.0 s      4        6
+    2026-10-04       27.0 s      1        0
+    2026-10-07       28.0 s      1        0
+    2026-10-12       53.7 s      6        1
+    2026-10-16       39.9 s      7        0
+    posterior on the mean: 35.9 s, 80 % 32.6 to 39.2 s (df 14), n = 10 sessions, 29 holds, 11 censored
+    narrowing against the prior: 0.56
+    leave-one-session-out 80 % predictive coverage: 8/10 (80%)
+      2026-09-02   38.0 s in [ 23.1,  48.3]  yes
+      2026-09-04   47.5 s in [ 23.2,  46.2]  NO
+      2026-09-05   27.0 s in [ 24.8,  48.8]  yes
+      2026-09-08   40.0 s in [ 23.0,  48.0]  yes
+      2026-09-18   26.0 s in [ 25.1,  48.8]  yes
+      2026-10-02   31.0 s in [ 24.0,  48.9]  yes
+      2026-10-04   27.0 s in [ 24.8,  48.8]  yes
+      2026-10-07   28.0 s in [ 24.6,  48.9]  yes
+      2026-10-12   53.7 s in [ 24.2,  43.8]  NO
+      2026-10-16   39.9 s in [ 23.0,  48.0]  yes
+
+  Compensation rule (frozen): considered only when the per-hold predictive 80 % width on an
+  oximeter is ≤ 15 s over ≥ 10 sessions and a two-oximeter recording has separated device
+  delay from circulation transit. The export cannot hold a two-oximeter recording
+  (one SpO₂ source per session), so that condition is false.
+  stamina: 4 sessions, predictive 80 % width for a new session's mean 24.8 s: NOT MET
+  pm100: 10 sessions, predictive 80 % width for a new session's mean 24.0 s: NOT MET
+
+2. HOLD-VOLUME CLASSIFIER (contract §6)
+---------------------------------------
+
+Labels: 51 full (full or packed, recorded by Nadir, plus the confirmed 6 August hold 9),
+31 RV (Nadir plus the confirmed 6 August holds 1-8), 0 FRC (counted, excluded). 19 sessions. Imported holds
+without a confirmation are not labels.
+
+  Leave-one-session-out, all 15 features vs the name tokens alone vs the majority class:
+    model      acc @0.5  log loss   brier
+    model          0.91     0.242   0.067
+    name           0.62     0.713   0.258
+    majority       0.62     0.717   0.260
+
+  Abstention band search (widest band, accuracy ≥ 90 %, coverage ≥ 50 %; LOSO probabilities
+  of every session but 6 August):
+    model     [0.05, 0.85]  coverage 59%, accuracy 95%
+    name      none qualifies
+    majority  none qualifies
+
+  Deployment check, 6 August 2026 (held out, confirmed labels), band [0.05, 0.85]:
+    hold 1  planned   65 s  p(full) 0.14  verdict abstain  confirmed rv
+    hold 2  planned   78 s  p(full) 0.09  verdict abstain  confirmed rv
+    hold 3  planned   81 s  p(full) 0.07  verdict abstain  confirmed rv
+    hold 4  planned  102 s  p(full) 0.04  verdict rv       confirmed rv
+    hold 5  planned  122 s  p(full) 0.03  verdict rv       confirmed rv
+    hold 6  planned  137 s  p(full) 0.04  verdict rv       confirmed rv
+    hold 7  planned  132 s  p(full) 0.05  verdict rv       confirmed rv
+    hold 8  planned  138 s  p(full) 0.04  verdict rv       confirmed rv
+    hold 9  planned  321 s  p(full) 0.92  verdict full     confirmed full
+    decided 6/9, all decided correct: True
+  21 February 2026 (Masimo CSV; v7 labels, never confirmed; final model):
+    hold 1  planned  180 s  p(full) 0.58  verdict abstain  v7 label full
+    hold 2  planned  135 s  p(full) 0.23  verdict abstain  v7 label frc
+    hold 3  planned  130 s  p(full) 0.02  verdict rv       v7 label rv
+    hold 4  planned  242 s  p(full) 0.11  verdict abstain  v7 label rv
+    hold 5  planned  188 s  p(full) 0.39  verdict abstain  v7 label frc
+    hold 6  planned  373 s  p(full) 0.91  verdict full     v7 label full
+  Unconfirmed imported holds (153): would be estimated full 47, RV 1, left as imported 105.
+
+  Classes: Not enough data yet: 10 more confirmed FRC holds.
+
+3. LUNG VOLUMES AND OXYGEN STORES (contract §11, §12)
+----------------------------------------------------
+
+  NHANES cohort: 5407 never-smokers aged 20-79 without asthma, emphysema or chronic bronchitis,
+  FVC and FEV1 graded A/B (2007-08 1672, 2009-10 1958, 2011-12 1777). Each cycle held out in turn; k scales σ to 90 % pooled coverage.
+    male   fvc   n  2315; spread age, k = 0.985; held-out coverage by cycle 2007-08 90.4% -> 90.2%, 2009-10 91.7% -> 91.3%, 2011-12 89.0% -> 88.3%; pooled 90.4% -> 90.0%
+    male   fev1  n  2315; spread age, k = 0.995; held-out coverage by cycle 2007-08 90.6% -> 90.4%, 2009-10 91.2% -> 91.1%, 2011-12 88.5% -> 88.3%; pooled 90.1% -> 90.0%
+    female fvc   n  3092; spread age, k = 1.012; held-out coverage by cycle 2007-08 93.3% -> 93.5%, 2009-10 91.0% -> 91.7%, 2011-12 84.0% -> 84.7%; pooled 89.5% -> 90.0%
+    female fev1  n  3092; spread age, k = 1.002; held-out coverage by cycle 2007-08 92.9% -> 92.9%, 2009-10 91.4% -> 91.5%, 2011-12 85.5% -> 85.5%; pooled 89.9% -> 90.0%
+  Cross-check of the fitted medians (L):
+    sex     age   cm   FVC fit  Non23  ECSC93   FEV1 fit  Non23
+    male     40  165      4.19   4.23    4.12       3.40   3.48
+    male     40  175      4.77   4.84    4.70       3.82   3.91
+    male     40  185      5.39   5.53    5.28       4.26   4.40
+    male     60  165      3.73   3.61    3.60       2.86   2.87
+    male     60  175      4.24   4.13    4.18       3.21   3.22
+    male     60  185      4.79   4.72    4.76       3.59   3.63
+    female   40  155      3.15   3.19    2.94       2.60   2.63
+    female   40  165      3.60   3.65    3.38       2.92   2.96
+    female   40  175      4.07   4.17    3.82       3.26   3.33
+    female   60  155      2.72   2.73    2.42       2.14   2.17
+    female   60  165      3.10   3.12    2.86       2.40   2.44
+    female   60  175      3.51   3.56    3.30       2.68   2.75
+
+  Static volumes, route 2 (predicted FVC ÷ ECSC ratios) against route 1 (ECSC TLC/FRC/RV):
+    profile                 TLC r2    r1  FRC r2    r1  RV r2    r1
+    male 180 cm, 25 y        7.01  7.30    3.44  3.35   1.66  1.68
+    male 180 cm, 45 y        7.23  7.30    3.85  3.53   2.28  2.12
+    male 180 cm, 65 y        7.16  7.30    4.11  3.71   2.82  2.56
+    female 165 cm, 25 y        5.31  5.10    2.61  2.72   1.46  1.39
+    female 165 cm, 45 y        5.31  5.10    2.78  2.74   1.82  1.71
+    female 165 cm, 65 y        5.02  5.10    2.79  2.76   2.06  2.03
+    each ratio's own log-SD (derived from the ECSC RSDs at 45 y, the larger sex): VC/TLC 0.089, FRC/TLC 0.127, RV/TLC 0.173. Route 2 ships.
+
+  Constants (value [Monte Carlo range], status):
+    btpsToStpd                  0.826 [0.803, 0.826] derived
+    fAO2Start                   0.1444               verified-in-secondary
+    PETO2 end (mmHg)            26.9 [19.4, 34.4]    verified-in-source
+    hufner                      1.34 [1.31, 1.39]    verified-in-secondary
+    haemoglobin male            15.0 [13.0, 17.0]    unverified
+    haemoglobin female          13.5 [12.0, 15.5]    unverified
+    muscleFraction male         0.384 [0.33, 0.44]   verified-in-source
+    muscleFraction female       0.306 [0.26, 0.35]   verified-in-source
+    myoglobinPerKgMuscle        4.7 [3.5, 6.0]       verified-in-source
+    myoglobinO2PerGram          1.34 [1.26, 1.34]    verified-in-secondary
+    myoglobinUsableFraction     0.5 [0.0, 1.0]       unverified
+    restingVO2PerKg (MET)       3.5 [3.5, 4.1]       verified-in-source
+    diveReflexFactor            0.85 [0.68, 1.0]     derived
+    sigmaFloor: σ_pop           0.3 [0.29, 0.4]      derived
+    sigmaFloor: r²              0.29 [0.29, 0.45]    derived
+    Nadler k1, k2, k3           (0.3669, 0.03219, 0.6041) / (0.3561, 0.03308, 0.1833)  verified-in-secondary
+    fAO2End                     0.0377  derived (PETO2 end / 713)
+    restingVO2PerKg emitted     3.777  derived (puts the reference diver's point T on the Monte Carlo median; MET 3.5)
+    arterial saturation         0.979 -> 0.501  derived (Severinghaus ODC at 0.1444·713 and 26.9 mmHg)
+    venous saturation           0.75 -> 0.501  start unverified (textbook), end = arterial end
+    arterialFraction            0.628 [0.25, 1.0]  unverified (uncited split; the value reproduces the median blood store)
+    sigmaMC 0.188, personalised 0.143, floor 0.253 (= sqrt(1 − 0.29)·0.30, derived)
+  Golden row (#701): male 1.80 m, 75 kg, TLC 7.5 L measured: usable O₂ 1.16 L at the point constants; Monte Carlo 80 % 0.94-1.38 L (median 1.15). #701 says about 1.2 L.
+  Cross-check: usable share of the starting store 0.58 against Schagatay 2009's 0.5 (non-diver) to 0.7 (trained); the starting store here leaves out
+  tissue-dissolved O₂ and the spleen.
+  Cross-check: blood store of a 70 kg, 1.75 m man (height assumed): 867 mL at the start, 381 mL usable, against Rahn's 880 mL (70 kg, total).
+  Reference diver T_phys: full 289 s, FRC 208 s, RV 170 s (FRC and RV from the route-2 ratios at 35 y); ratios FRC/full 0.72, RV/full 0.59.
+  These ratios are a population statement only. They never replace DryBestEstimate's 1/2 and
+  1/3 or feed any planning (§16): they would raise FRC and RV table targets above what a diver has
+  demonstrated. The app shows the usable stores in litres, nothing in seconds.
+  Group check, Schagatay 2012 elite men (184 cm, 82 kg, VC 7.3 L, age assumed 30): full-lung T_phys 80 % 231-442 s against their competition mean 353 s (SE 39); the decomposition is known to
+  under-predict elites (packing, spleen, trained end saturation).
+
+  Thomas's physiology prior: unavailable, the export carries no profile (sex, date of birth, height, weight), so the
+  hold model below uses its placeholder prior.
+
+4. HOLD MODEL: WHERE THE PB MIGHT LAND (contract §10 v2)
+--------------------------------------------------------
+
+Rows: per session and lung-mode slot, the longest eligible hold (BestDetection's candidate),
+plus any hold marked as a max attempt. Uncensored only when the diver ended it outside a
+series; a timer end, the floor, an abort or a series hold is a lower bound.
+
+  session     slot  style     held  planned  row        
+  2026-08-06  rv    rv        2:18     2:18  censored
+  2026-08-06  full  full      5:21     5:21  censored
+  2026-08-27  full  full      5:12     5:12  censored
+  2026-09-02  full  full      5:12     5:12  censored
+  2026-09-04  rv    rv        2:29     open  censored
+  2026-09-04  full  full      5:32     5:32  censored
+  2026-09-05  full  full      5:32     5:32  censored
+  2026-09-08  full  full      2:30     2:30  censored
+  2026-09-10  full  full      2:30     2:30  censored
+  2026-09-14  full  full      5:12     5:32  UNCENSORED
+  2026-09-18  full  full      5:02     5:32  UNCENSORED
+  2026-09-29  full  full      3:15     3:15  censored
+  2026-10-02  rv    rv        1:45     open  censored
+  2026-10-02  full  full      2:23     open  censored
+  2026-10-04  full  packed    4:53     4:53  censored
+  2026-10-06  full  packed    4:53     4:53  censored
+  2026-10-07  full  packed    5:12     5:12  censored
+  2026-10-09  full  packed    4:26     5:12  censored
+  2026-10-14  full  full      5:45     5:45  censored
+
+  Diagnostics (harness only):
+    full  rows v1  3 (3 uncensored)   v2 16 (2 uncensored)
+    frc   rows v1  0 (0 uncensored)   v2  0 (0 uncensored)
+    rv    rows v1  0 (0 uncensored)   v2  3 (0 uncensored)
+    sessions skipped because the diver reported hypoxia (the §10 rule): 3; rows lost: full 3 rows (0 uncensored), frc 0 rows (0 uncensored), rv 3 rows (0 uncensored)
+    4 Oct: the open-ended full hold of 39 s (step 10) is not a row; the packed 293 s hold takes the full slot.
+
+  Forward chain (sessions with rows by date, first 5 as burn-in):
+    model                  scored uncens  log score  80% cov   MAE s
+    base h=none                12      2      -1.72     100%     109
+    base h=180.0               12      2      -1.71     100%     107
+    base h=365.0               12      2      -1.72     100%     108
+    PB-fallback                12      2      -0.88     100%      83
+    comparable-history         12      2      -4.19     100%      25
+    physiology-only       unavailable: the export carries no profile
+    half-life: not decidable with 2 uncensored rows, none used (a half-life must beat none on
+    log score with coverage within 70-90 %, which 2 rows cannot show)
+    Point baselines are scored with the base model's spread at the same step, so they differ
+    only in where they centre the prediction.
+
+  Inputs, one at a time against the base (admit on log-score gain with coverage 70-90 %):
+    holdIndex                 not admitted  gain +0.00   not estimable (2 uncensored rows)
+    logRestBefore             not admitted  gain +0.00   not estimable (2 uncensored rows)
+    warmUp                    not admitted  gain +0.00   not estimable (2 uncensored rows)
+    breatheHyperventilation   not admitted  gain +0.00   not estimable (2 uncensored rows)
+    breathePacking            not admitted  gain +0.00   not estimable (2 uncensored rows)
+    openEnded                 not admitted  gain +0.00   not estimable (2 uncensored rows)
+    logDaysSinceLastSession   not admitted  gain +0.00   not estimable (2 uncensored rows)
+    logDaysSinceLastMax       not admitted  gain +0.00   not estimable (2 uncensored rows)
+    timeOfDaySin              not admitted  gain +0.00   not estimable (2 uncensored rows)
+    timeOfDayCos              not admitted  gain +0.00   not estimable (2 uncensored rows)
+    preHoldHeartRate          not admitted  gain +0.00   not estimable (2 uncensored rows)
+    co2Tolerance              not admitted  gain +0.00   not estimable (2 uncensored rows)
+    urgeOnset                 not admitted  gain +0.00   not estimable (2 uncensored rows)
+    hypoxicTolerance          not admitted  gain +0.00   not estimable (2 uncensored rows)
+    desaturationRate          not admitted  gain +0.00   not estimable (2 uncensored rows)
+    diveReflex                not admitted  gain +0.00   not estimable (2 uncensored rows)
+    recovery                  not admitted  gain +0.00   not estimable (2 uncensored rows)
+    admitted covariates: none; admitted axes: none
+    per-step estimate (former 4b): NOT ADOPTED (no context input admitted, so it would equal the level)
+
+  Model on all data (half-life none, σ = 0.175 log units, df 8.0):
+    full  prior placeholder N(ln 5:45, 0.50²); counts 2 uncensored, 14 censored, effective 16.0
+      level 5:43-7:04 (centre 6:21), narrowing 0.84, gate waiting
+      pb    4:52-8:18 (centre 6:21), narrowing 0.65, gate waiting
+    frc   prior placeholder N(ln 2:53, 0.50²); counts 0 uncensored, 0 censored, effective 0.0
+      level 1:26-5:47 (centre 2:53), narrowing -0.09, gate waiting
+      pb    1:22-6:02 (centre 2:53), narrowing 0.02, gate waiting
+    rv    prior placeholder N(ln 1:55, 0.50²); counts 0 uncensored, 3 censored, effective 3.0
+      level 2:15-4:10 (centre 3:04), narrowing 0.52, gate waiting
+      pb    2:04-4:33 (centre 3:04), narrowing 0.48, gate waiting
+    full  level posterior (same prior) with censored rows 6:21 (sd 0.075), without 5:08 (sd 0.086)
+    frc   level posterior (same prior) with censored rows 2:53 (sd 0.500), without 2:53 (sd 0.500)
+    rv    level posterior (same prior) with censored rows 3:04 (sd 0.220), without 1:55 (sd 0.500)
+
+5. HOLD MARKERS AND DIVER AXES (contract §7, §8)
+-----------------------------------------------
+
+Markers are computed for all 235 performed holds (measurements, always shown). Axes are medians
+over holds of 60 s or more before the as-of date, imported holds only when confirmed, pooled
+across lung modes (the per-oximeter split below is the harness's only).
+Unweighted in this run: no half-life is in use.
+
+  axis                  value  holds effective         stamina           pm100  gate
+  co2Tolerance          0.795     58      58.0       0.907 (1)      0.796 (30)  enough
+  urgeOnset               134     58      58.0         291 (1)        116 (30)  enough
+  hypoxicTolerance         75     49      49.0          69 (9)         75 (40)  enough
+  desaturationRate      -17.1     45      45.0       -27.5 (9)      -13.2 (36)  enough
+  diveReflex              0.1     74      74.0     -0.0417 (9)      0.154 (40)  enough
+  recovery                 46     29      29.0          35 (8)         53 (21)  enough
+  Units: co2Tolerance first-contraction share of the hold, urgeOnset s, hypoxicTolerance SpO₂ low %,
+  desaturationRate %/min, diveReflex HR drop share, recovery s back to the pre-hold reading.
+
+6. EVIDENCE GATES (contract §13, §16) AND CALIBRATION
+----------------------------------------------------
+
+  Calibration (pb, scored on the next session's uncensored max attempts):
+    0 enough-decisions with defaults
+    No pb gate said enough anywhere in the chain, so nothing could be scored; floors stay
+    at the defaults.
+    delay.stamina: 1 enough-decisions; the mean interval covered the next session's mean 1/1, the predictive interval 1/1
+    delay.pm100: 7 enough-decisions; the mean interval covered the next session's mean 1/7, the predictive interval 5/7
+    (the delay shows an interval on the mean, so its coverage moves no floor)
+  calibrated: no, coverage n/a over 0 decisions; floors pb/level 5/4, delay 3/2, axis 5/4, holdVolume 10
+
+  key                     state       narrowing  counts / sentence
+  delay.stamina           enough           0.38  {"sessionsWithOximeter.stamina": 4}
+  delay.pm100             enough           0.56  {"sessionsWithOximeter.pm100": 10}
+  holdVolume              waiting             -  {"confirmedHolds.full": 51, "confirmedHolds.rv": 31, "confirmedHolds.frc": 0}
+                                               Not enough data yet: 10 more confirmed FRC holds.
+  axis.co2Tolerance       enough              -  {"holdsWithContractions": 58}
+  axis.urgeOnset          enough              -  {"holdsWithContractions": 58}
+  axis.hypoxicTolerance   enough              -  {"holdsWithSpO2": 49}
+  axis.desaturationRate   enough              -  {"holdsWithSpO2": 45}
+  axis.diveReflex         enough              -  {"holdsWithSpO2": 74}
+  axis.recovery           enough              -  {"holdsWithSpO2": 29}
+  pb.full                 waiting          0.65  {"maxAttempts.full": 2, "censored": 14}
+                                               Not enough data yet: 3 more max attempts at full lung.
+  level.full              waiting          0.84  {"maxAttempts.full": 2, "censored": 14}
+                                               Not enough data yet: 3 more max attempts at full lung.
+  pb.frc                  waiting          0.02  {"maxAttempts.frc": 0, "censored": 0}
+                                               Not enough data yet: 5 more max attempts at FRC.
+  level.frc               waiting         -0.09  {"maxAttempts.frc": 0, "censored": 0}
+                                               Not enough data yet: 5 more max attempts at FRC.
+  pb.rv                   waiting          0.48  {"maxAttempts.rv": 0, "censored": 3}
+                                               Not enough data yet: 5 more max attempts at RV.
+  level.rv                waiting          0.52  {"maxAttempts.rv": 0, "censored": 3}
+                                               Not enough data yet: 5 more max attempts at RV.
+  spirometry              waiting             -  {"profileField.sex": 0, "profileField.dateOfBirth": 0, "profileField.heightCm": 0}
+                                               Not enough data yet: needs your date of birth, height and sex.
+  oxygenStore             waiting             -  {"profileField.sex": 0, "profileField.dateOfBirth": 0, "profileField.heightCm": 0, "profileField.weightKg": 0}
+                                               Not enough data yet: needs your date of birth, height, sex and weight.
+
+  Priors.evidence header: calibrated: no, coverage n/a over 0 decisions; floors pb/level 5/4, delay 3/2, axis 5/4, holdVolume 10
+
+7. CHOICES THE CONTRACT LEAVES TO THE HARNESS
+---------------------------------------------
+
+  - Delay prior: data-informed (mu0 = mean of all session means, beta0 = pooled between-session
+    variance with alpha0 = 2, kappa0 = 2). LOSO re-chooses it without the held-out session.
+  - Time zone for §9 time of day: Europe/London (the day-only STAmina imports start at 23:00Z in
+    August).
+  - Hold-volume standardisation: population SD over the labelled rows; band grid 0.05.
+  - Hold model σ² prior: inverse-gamma a0 = 3, b0 = 0.045 (prior mean σ = 0.15), judgement.
+  - Half-life: admitted like any input (must beat none on log score with coverage 70-90 %).
+  - Coefficients for a candidate input: ridge on uncensored rows within volumes, prior sd 0.2 per input
+    sd; censored rows do not inform coefficients.
+  - level rowsToReach (the contract gives pb's only): smallest m with t90(2an+m)·sqrt(1/(1/s0² + (n+m)/σ²))
+    ≤ (1 − ρ)·1.2816·s0.
+  - A volume with no prior waits with 1 more max attempt at full lung (any outcome sets the placeholder).
+  - Point baselines (PB-fallback, comparable-history) are scored with the base model's spread;
+    comparable-history is openHoldEstimates for an open hold, the planned length for a timed one.
+  - Static volumes: a measured TLC is the TLC that the FRC and RV ratios multiply; the ratio log-SDs
+    are the larger sex's at 45 y.
+  - Oxygen store σ_MC uses the reference diver with measured TLC and route-2 FRC/RV.
+  - The delay calibration chain reuses the prior chosen on all sessions (mild leakage); it moves no floor.
+  - Profile-field units carry the DiverProfile identifiers (sex, dateOfBirth, heightCm, weightKg); the
+    sentence uses the display names. lungVolume.tlc is required only when every field is present and
+    no TLC can be estimated; its display name is TLC.
+  - Spirometry: unweighted (NHANES survey weights ignored); the 2011-12 cycle covers 84-89 % held out
+    while the earlier two cover 90-93 %, a cycle effect that one σ scale cannot remove.
+  - The full-lung level with censored rows (6:21) sits above every full-lung hold that can be a row
+    (longest 5:45): the timed finals end at the timer, so they are lower bounds. That is
+    exactly why the gate waits on diver-ended attempts instead of showing it. (The longest full-styled
+    hold anywhere is an unconfirmed STAmina import of 6:30, which the model does not read.)
+

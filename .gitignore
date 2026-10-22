@@ -53,3 +53,6 @@ htmlcov/
 
 # Logs
 *.log
+
+# Harness outputs: real traces and the generated Swift literal (they belong in Nadir, not here)
+backend/scripts/experiments/exp_v9_00/out/
