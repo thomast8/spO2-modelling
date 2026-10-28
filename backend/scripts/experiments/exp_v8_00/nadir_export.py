@@ -10,11 +10,13 @@ plus a `meta` dict (session, duration, outcome, coverage) that v7 never had.
 Decisions that v7's code forces:
 
 - The gamma-kernel convolution in Stage B assumes a complete 1 Hz grid, so dropouts and
-  samples without skin contact are filled by linear interpolation. The fraction filled and
-  the longest gap are kept in `meta` and the QC rule rejects holds where it is too much.
+  samples without skin contact are filled by linear interpolation, over the whole hold
+  (a dropout at the start or end included) and over the recovery. The fraction of the
+  hold filled and the longest gap are kept in `meta` and the QC rule rejects holds where
+  it is too much.
 - Recovery follows v7's rule: at most 90 s after the hold, stopping once SpO2 is back at
   97 % or more (after the first 5 s). In a Nadir export that means walking across the steps
-  that follow the hold, since vitals are stored per step.
+  that follow the hold, since vitals are stored per step, and stopping at the next hold.
 
 Usage:
     uv run python scripts/experiments/exp_v8_00/nadir_export.py <export.json | session.csv> ...
@@ -23,6 +25,7 @@ Usage:
 import csv
 import json
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -34,27 +37,43 @@ MIN_HOLD_S = 30
 
 STYLE_TO_TYPE = {"full": "FL", "frc": "FRC", "rv": "RV"}
 
-# Lung volumes the export has wrong, by session day and hold number (1-based, counting
-# every performed hold). A STAmina import carries no lung volume and Nadir's importer
-# labels every hold `full`; Thomas confirmed on 17 October 2026 that the 6 August table
+# Lung volumes the source does not carry or has wrong, by session and hold number (1-based,
+# counting every performed hold). A STAmina CSV carries none, so its holds are fitted only
+# for a session listed here; February's are the v7 spec's. A STAmina import into Nadir is
+# labelled `full` throughout; Thomas confirmed on 17 October 2026 that the 6 August table
 # was eight RV exhale holds followed by one full-lung hold.
-LABEL_OVERRIDES = {"2026-08-06": {**{k: "RV" for k in range(1, 9)}, 9: "FL"}}
+LABEL_OVERRIDES = {
+    "2026-02-21": {1: "FL", 2: "FRC", 3: "RV", 4: "RV", 5: "FRC", 6: "FL"},
+    "2026-08-06": {**{k: "RV" for k in range(1, 9)}, 9: "FL"},
+}
 
 
-def _fill_gaps(t, spo2):
-    """Return a complete 1 Hz grid with linear interpolation over missing seconds."""
-    grid = np.arange(t[0], t[-1] + 1, 1.0)
+def _fill_gaps(t, spo2, t_last):
+    """Return a 1 Hz grid from the hold's first second to `t_last` (or the last sample, if
+    later), with linear interpolation over missing seconds. A dropout at either end is held
+    at the nearest reading and counted as missing like any other."""
+    end = max(t[-1], t_last)
+    grid = np.arange(0, end + 1, 1.0)
     filled = np.interp(grid, t, spo2)
     present = np.isin(grid, t)
-    gaps = np.diff(t)
+    # The seconds before the hold and after its end bound the dropouts at either end.
+    gaps = np.diff(np.concatenate([[-1.0], t, [end + 1]]))
+    level = np.concatenate([[spo2[0]], spo2, [spo2[-1]]])
     # A long gap on the 99 % plateau costs nothing; one across the descent invents the curve.
     # v7 itself trained on FL#6 with a 6 s gap near its nadir, so the line is drawn above that.
-    off_plateau = any(g > 10 and min(spo2[i], spo2[i + 1]) < 95 for i, g in enumerate(gaps))
-    return grid, filled, 1.0 - present.mean(), float(gaps.max()) if len(gaps) else 0.0, off_plateau
+    off_plateau = any(g > 10 and min(level[i], level[i + 1]) < 95 for i, g in enumerate(gaps))
+    return grid, filled, 1.0 - present.mean(), float(gaps.max()), off_plateau
 
 
 def _make_hold(hold_id, hold_type, t_apnea, spo2_apnea, hr_apnea, t_rec, spo2_rec, hr_rec, meta):
     t_end = float(t_apnea[-1])
+    if len(t_rec):
+        # Stage B convolves the trace as an array, so the recovery goes on the same 1 Hz grid,
+        # interpolated from the last apnea second over any missing ones.
+        grid = np.arange(t_end + 1, t_rec[-1] + 1)
+        spo2_rec = np.interp(grid, np.r_[t_end, t_rec], np.r_[spo2_apnea[-1], spo2_rec])
+        hr_rec = np.interp(grid, np.r_[t_end, t_rec], np.r_[hr_apnea[-1], hr_rec])
+        t_rec = grid
     t = np.concatenate([t_apnea, t_rec])
     spo2 = np.concatenate([spo2_apnea, spo2_rec])
     return {
@@ -68,7 +87,7 @@ def _make_hold(hold_id, hold_type, t_apnea, spo2_apnea, hr_apnea, t_rec, spo2_re
         "spo2_apnea": spo2_apnea,
         "t_recovery": t_rec,
         "spo2_recovery": spo2_rec,
-        "meta": meta,
+        "meta": {**meta, "recovery_s": float(len(t_rec))},
     }
 
 
@@ -87,9 +106,13 @@ def _trim_recovery(t_rec, spo2_rec, hr_rec):
 
 def load_nadir(path):
     data = json.loads(Path(path).read_text())
+    per_day = Counter(s["startedAt"][:10] for s in data["sessions"])
     holds = []
     for session in sorted(data["sessions"], key=lambda s: s["startedAt"]):
+        # A session is named by its day, and by its start time too when the day has several.
         day = session["startedAt"][:10]
+        if per_day[day] > 1:
+            day += "T" + session["startedAt"][11:16].replace(":", "")
         steps = session["steps"]
         # A session Nadir rebuilt from a STAmina export was recorded by STAmina (Masimo
         # MightySat), not by the app and its connected oximeter. It is the only device
@@ -117,13 +140,17 @@ def load_nadir(path):
             t_raw, idx = np.unique(t_raw, return_index=True)
             spo2_raw = np.array([good[j]["spo2"] for j in idx], dtype=float)
             hr_raw = np.array([good[j].get("heartRate") or np.nan for j in idx], dtype=float)
-            t_apnea, spo2_apnea, missing, max_gap, off_plateau = _fill_gaps(t_raw, spo2_raw)
+            t_apnea, spo2_apnea, missing, max_gap, off_plateau = _fill_gaps(
+                t_raw, spo2_raw, np.ceil(duration) - 1
+            )
             hr_apnea = np.interp(t_apnea, t_raw, hr_raw)
 
             # Recovery: walk the following steps, offsetting each by the time before it.
             offset = duration
             rec = []
             for nxt in steps[i + 1 :]:
+                if nxt.get("kindName") == "hold":
+                    break
                 for v in nxt.get("vitals", []):
                     if v.get("contactDetected", True) and v.get("spo2") is not None:
                         rec.append(
@@ -136,10 +163,12 @@ def load_nadir(path):
                 offset += float(nxt.get("actualDuration", 0))
                 if offset - t_apnea[-1] > RECOVERY_MAX_S:
                     break
-            rec = sorted(r for r in rec if r[0] >= 1)
-            t_rec = np.array([r[0] for r in rec], dtype=float)
-            spo2_rec = np.array([r[1] for r in rec], dtype=float)
-            hr_rec = np.array([r[2] for r in rec], dtype=float)
+            # Steps record a second or two past their duration, so the next step's first
+            # seconds can repeat them; the earlier step's reading is kept, as in the apnea.
+            rec = [r for r in rec if r[0] >= 1]
+            t_rec, idx = np.unique(np.array([r[0] for r in rec], dtype=float), return_index=True)
+            spo2_rec = np.array([rec[j][1] for j in idx], dtype=float)
+            hr_rec = np.array([rec[j][2] for j in idx], dtype=float)
             t_rec, spo2_rec, hr_rec = _trim_recovery(t_rec, spo2_rec, hr_rec)
             t_rec += t_apnea[-1]
 
@@ -173,7 +202,6 @@ def load_nadir(path):
                         "no_contact": sum(
                             1 for v in step.get("vitals", []) if not v.get("contactDetected", True)
                         ),
-                        "recovery_s": float(len(t_rec)),
                     },
                 )
             )
@@ -226,10 +254,14 @@ def load_stamina(path):
         k += 1
         if block[-1][0] - block[0][0] < MIN_HOLD_S:
             continue
+        hold_type = LABEL_OVERRIDES.get(day, {}).get(k)
+        if hold_type is None:
+            print(f"  skip {day} hold {k}: lung volume not in a STAmina CSV and not listed")
+            continue
         t0 = block[0][0]
         t_raw = np.array([r[0] - t0 for r in block], dtype=float)
         t_apnea, spo2_apnea, missing, max_gap, off_plateau = _fill_gaps(
-            t_raw, np.array([r[4] for r in block])
+            t_raw, np.array([r[4] for r in block]), t_raw[-1]
         )
         hr_apnea = np.interp(t_apnea, t_raw, [r[3] for r in block])
         t_rec = spo2_rec = hr_rec = np.array([], dtype=float)
@@ -240,8 +272,6 @@ def load_stamina(path):
             hr_rec = np.array([r[3] for r in nb], dtype=float)
             t_rec, spo2_rec, hr_rec = _trim_recovery(t_rec, spo2_rec, hr_rec)
             t_rec += t_apnea[-1]
-        # Lung volume is not in a STAmina export; the February session's labels come from v7.
-        hold_type = {1: "FL", 2: "FRC", 3: "RV", 4: "RV", 5: "FRC", 6: "FL"}.get(k, "FL")
         holds.append(
             _make_hold(
                 f"{day}-{hold_type}{k}",
@@ -264,7 +294,6 @@ def load_stamina(path):
                     "gap_off_plateau": off_plateau,
                     "no_contact": 0,
                     "relabelled": False,
-                    "recovery_s": float(len(t_rec)),
                 },
             )
         )
