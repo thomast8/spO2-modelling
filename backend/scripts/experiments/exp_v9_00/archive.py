@@ -12,15 +12,28 @@ Every helper mirrors a Swift computed property or function; the Swift name is in
 """
 
 import csv
+import importlib.util
 import json
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "exp_v8_00"))
-from nadir_export import LABEL_OVERRIDES, _hms  # noqa: E402
+
+
+def _v8_loader():
+    """exp_v8_00's loader module, loaded from its file (it is not a package)."""
+    spec = importlib.util.spec_from_file_location(
+        "nadir_export", HERE.parent / "exp_v8_00" / "nadir_export.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_V8 = _v8_loader()
+LABEL_OVERRIDES = _V8.LABEL_OVERRIDES
+_hms = _V8._hms
 
 # Contract §2. The export carries no sensor roster; the harness stands one in.
 HARNESS_PM100_KEY = "pm100"

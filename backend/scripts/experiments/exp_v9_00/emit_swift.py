@@ -37,13 +37,20 @@ def kinds(d):
     return "[" + ", ".join(f".{k}: {v}" for k, v in d.items()) + "]"
 
 
+def optional(x):
+    return "nil" if x is None else num(x)
+
+
+def names(xs):
+    return "[" + ", ".join(f'"{x}"' for x in xs) + "]"
+
+
 def task(t):
     prim = "nil" if t["primary"] is None else f".{t['primary']}"
-    rho = lambda x: "nil" if x is None else num(x)  # noqa: E731
     return (
         f".init(\n            enough: {kinds(t['enough'])}, keep: {kinds(t['keep'])},\n"
-        f"            primary: {prim}, rhoEnough: {rho(t['rhoEnough'])}, rhoKeep: "
-        f"{rho(t['rhoKeep'])}\n        )"
+        f"            primary: {prim}, rhoEnough: {optional(t['rhoEnough'])}, rhoKeep: "
+        f"{optional(t['rhoKeep'])}\n        )"
     )
 
 
@@ -218,7 +225,6 @@ def swift(r, export_name):
     lines.append("")
     cfg = r["hold_model"]["config"]
     hl = "nil" if cfg["halfLifeDays"] is None else num(cfg["halfLifeDays"])
-    names = lambda xs: "[" + ", ".join(f'"{x}"' for x in xs) + "]"  # noqa: E731
     ratios = ", ".join(f"{MODE_CASE[k]}: {num(v)}" for k, v in cfg["placeholderRatios"].items())
     lines += [
         "    /// Inputs, coefficients and half-life chosen by the forward chain; σ² prior is "
