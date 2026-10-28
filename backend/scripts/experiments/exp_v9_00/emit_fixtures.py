@@ -33,7 +33,7 @@ from features import (
     recovery_trace,
 )
 from fit_delay import KEYS, post_hold_delay
-from fit_hold_model import MODES, base_config, estimates, fit, hypoxic_for_physiology
+from fit_hold_model import MODES, base_config, estimates, fit
 from fit_hold_volume import predict, verdict
 from fit_lung_volume import predict as spiro_predict
 from fit_oxygen_store import REFERENCE, headroom, physiology_prior, stores, volumes_for
@@ -428,45 +428,31 @@ def emit(r, out_dir, export_name):
         }
     )
     if o2 is not None:
-        # §12 personalisation pinned on hand-built sessions: the hypoxicTolerance axis replaces
-        # the arterial end saturation and sigmaMCPersonalised applies; the same sessions without
-        # it for contrast.
+        # The Nadir-side hand-built sessions under the population physiology prior; one of
+        # them has a censored FRC row far below its prior (the log1p branch of logSurvival).
         hb, _, tz = hand
-        # sigmaFloor lowered for this case only, so the switch to sigmaMCPersonalised is visible
-        # (with the emitted floor both spreads sit under it).
-        o2_case = {k: v for k, v in o2.items() if k != "literatureRestingVO2PerKg"}
-        o2_case["sigmaFloor"] = 0.1
         t_end = max(started(x) for x in hb if x.get("endedAt") is not None)
         profile = dict(REFERENCE, dateOfBirth=f"{t_end.year - REFERENCE['age']}-{t_end:%m-%d}")
-        variants, expected = [], []
-        for on in (True, False):
-            c = dict(cfg, personalisePhysiology=on)
-            hyp = hypoxic_for_physiology(hb, c)
-            phys = physiology_prior(o2_case, profile, spiro, ratios, hyp)
-            model = fit(hb, c, phys, tz)
-            variants.append(
-                {
-                    "name": f"personalisePhysiology {on}",
-                    "personalisePhysiology": on,
-                    "previouslyShown": [],
-                    "hypoxicTolerance": hyp,
-                    "physiology": {v: {"mean": q[0], "sd": q[1]} for v, q in phys.items()},
-                }
-            )
-            expected.append(model_json(model, estimates(model, hb, floors=floors, tz=tz)))
+        phys = physiology_prior(o2, profile, spiro, ratios)
+        model = fit(hb, cfg, phys, tz)
         cases.append(
             {
-                "name": "hand-built, reference profile, sigmaFloor 0.1, personalised and not",
+                "name": "hand-built, reference profile, population physiology prior",
                 "sessions": hb,
                 "inputs": {
                     "holdModel": cfg,
                     "profile": profile,
-                    "oxygenStore": o2_case,
                     "floors": model_floors,
                     "timeZone": tz,
-                    "variants": variants,
+                    "variants": [
+                        {
+                            "name": "population physiology prior",
+                            "previouslyShown": [],
+                            "physiology": {v: {"mean": q[0], "sd": q[1]} for v, q in phys.items()},
+                        }
+                    ],
                 },
-                "expected": expected,
+                "expected": [model_json(model, estimates(model, hb, floors=floors, tz=tz))],
             }
         )
     written.append(write(out_dir, "hold-model.json", gen, cases))

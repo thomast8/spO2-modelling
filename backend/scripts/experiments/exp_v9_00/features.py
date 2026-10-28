@@ -19,6 +19,7 @@ from archive import (
     is_imported_from_stamina,
     is_performed_hold,
     lowest_spo2,
+    reoxygenation_target,
     started,
     style_source,
     symptoms,
@@ -225,14 +226,81 @@ def hr_baseline(session, step_index):
     return median(values)
 
 
-def _ols_slope(points):
-    n = len(points)
-    mt = sum(t for t, _ in points) / n
-    my = sum(y for _, y in points) / n
-    sxx = sum((t - mt) ** 2 for t, _ in points)
-    if sxx == 0:
+def _valid_oxygen(sample):
+    """VitalsSummary's oxygen filter: contact, finite, inside DomainLimits.spo2Range."""
+    x = sample.get("spo2")
+    return (
+        sample.get("contactDetected") is True
+        and x is not None
+        and math.isfinite(x)
+        and 0.0 <= x <= 100.0
+    )
+
+
+def oxygen_readings(step):
+    """`HoldOxygenDrop.readings`: per whole second inside 0...actualDuration, the mean of that
+    second's trusted SpO₂ (VitalsSummary); seconds without one are left out."""
+    by_second = {}
+    for sample in step.get("vitals", []):
+        if 0 <= sample["at"] <= step["actualDuration"]:
+            by_second.setdefault(sample["at"], []).append(sample)
+    out = []
+    for second in sorted(by_second):
+        values = [s["spo2"] for s in by_second[second] if _valid_oxygen(s)]
+        if values:
+            out.append((second, sum(values) / len(values)))
+    return out
+
+
+def hold_oxygen_drop(index, steps):
+    """`HoldOxygenDrop.measure(at:in:)`: (onset second, points per minute | None) or None.
+
+    Baseline: `reoxygenationTarget` over the steps since the previous hold, cleaned to trusted
+    in-range samples inside each step, needing three trusted seconds. Onset: the first of two
+    consecutive seconds at or below baseline − 2, with no gap before it. Rate: from onset to the
+    first hold low, only over four or more continuous seconds that end lower.
+    """
+    before = []
+    for step in reversed(steps[:index]):
+        if is_hold(step):
+            break
+        clean = dict(step)
+        clean["vitals"] = sorted(
+            (
+                v
+                for v in step.get("vitals", [])
+                if 0 <= v["at"] <= step["actualDuration"] and _valid_oxygen(v)
+            ),
+            key=lambda v: v["at"],
+        )
+        before.insert(0, clean)
+    if sum(len(oxygen_readings(s)) for s in before) < 3:
         return None
-    return sum((t - mt) * (y - my) for t, y in points) / sxx
+    baseline = reoxygenation_target(len(before), before)
+    if baseline is None:
+        return None
+    samples = oxygen_readings(steps[index])
+    if not samples or samples[0][0] > 1:
+        return None
+    onset = None
+    for p in range(1, len(samples)):
+        if samples[p][0] - samples[p - 1][0] != 1:
+            return None
+        if samples[p - 1][1] <= baseline - 2 and samples[p][1] <= baseline - 2:
+            onset = p - 1
+            break
+    if onset is None:
+        return None
+    lowest = min(range(onset, len(samples)), key=lambda i: samples[i][1])
+    falling = samples[onset : lowest + 1]
+    continuous = all(b[0] - a[0] == 1 for a, b in zip(falling, falling[1:], strict=False))
+    (t0, x0), (t1, x1) = samples[onset], samples[lowest]
+    rate = (
+        (x0 - x1) * 60 / (t1 - t0)
+        if len(falling) >= 4 and continuous and t1 > t0 and x1 < x0
+        else None
+    )
+    return t0, rate
 
 
 def hold_markers(session):
@@ -251,18 +319,7 @@ def hold_markers(session):
 
         early = [x for t, x in spo2 if t <= 30]
         baseline = max(early) if early else None
-        onset = None
-        if baseline is not None:
-            for j in range(len(spo2) - 1):
-                if spo2[j][1] <= baseline - 3 and spo2[j + 1][1] <= baseline - 3:
-                    onset = spo2[j][0]
-                    break
-        slope = None
-        if onset is not None:
-            tail = [(t, x) for t, x in spo2 if t >= onset]
-            if len(tail) >= 5:
-                s = _ols_slope(tail)
-                slope = None if s is None else s * 60
+        drop = hold_oxygen_drop(index, session["steps"])
 
         hr_base = hr_baseline(session, index)
         hr_min = min(x for _, x in hr) if hr else None
@@ -294,8 +351,8 @@ def hold_markers(session):
                 "spo2End": spo2[-1][1] if spo2 else None,
                 "spo2Low": lowest_spo2([index], session),
                 "secondsAtOrAbove95": sum(1 for _, x in spo2 if x >= 95),
-                "desaturationOnsetSeconds": onset,
-                "desaturationSlopePerMin": slope,
+                "desaturationOnsetSeconds": None if drop is None else drop[0],
+                "desaturationRatePerMin": None if drop is None else drop[1],
                 "hrBaseline": hr_base,
                 "hrMin": hr_min,
                 "hrDropShare": drop_share,
@@ -322,15 +379,13 @@ def cached_markers(session):
 AXES = {
     "co2Tolerance": "firstContractionShare",
     "urgeOnset": "firstContractionSeconds",
-    "hypoxicTolerance": "spo2Low",
-    "desaturationRate": "desaturationSlopePerMin",
+    "desaturationRate": "desaturationRatePerMin",
     "diveReflex": "hrDropShare",
     "recovery": "reoxygenationSeconds",
 }
 AXIS_UNIT = {
     "co2Tolerance": "holdsWithContractions",
     "urgeOnset": "holdsWithContractions",
-    "hypoxicTolerance": "holdsWithSpO2",
     "desaturationRate": "holdsWithSpO2",
     "diveReflex": "holdsWithSpO2",
     "recovery": "holdsWithSpO2",

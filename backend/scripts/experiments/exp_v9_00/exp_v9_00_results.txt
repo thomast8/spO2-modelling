@@ -168,7 +168,9 @@ without a confirmation are not labels.
     arterial saturation         0.979 -> 0.501  derived (Severinghaus ODC at 0.1444·713 and 26.9 mmHg)
     venous saturation           0.75 -> 0.501  start unverified (textbook), end = arterial end
     arterialFraction            0.628 [0.25, 1.0]  unverified (uncited split; the value reproduces the median blood store)
-    sigmaMC 0.188, personalised 0.143, floor 0.253 (= sqrt(1 − 0.29)·0.30, derived)
+    sigmaMC 0.188, floor 0.253 (= sqrt(1 − 0.29)·0.30, derived). Personalising
+    the physiology by the diver's own SpO₂ lows is removed by decision (nadir#703, #706); sigmaMCPersonalised
+    is emitted equal to sigmaMC only to keep the parked Swift type, and personalisePhysiology is false.
   Golden row (#701): male 1.80 m, 75 kg, TLC 7.5 L measured: usable O₂ 1.16 L at the point constants; Monte Carlo 80 % 0.94-1.38 L (median 1.15). #701 says about 1.2 L.
   Cross-check: usable share of the starting store 0.58 against Schagatay 2009's 0.5 (non-diver) to 0.7 (trained); the starting store here leaves out
   tissue-dissolved O₂ and the spleen.
@@ -245,7 +247,6 @@ series; a timer end, the floor, an abort or a series hold is a lower bound.
     preHoldHeartRate          not admitted  gain +0.00   not estimable (2 uncensored rows)
     co2Tolerance              not admitted  gain +0.00   not estimable (2 uncensored rows)
     urgeOnset                 not admitted  gain +0.00   not estimable (2 uncensored rows)
-    hypoxicTolerance          not admitted  gain +0.00   not estimable (2 uncensored rows)
     desaturationRate          not admitted  gain +0.00   not estimable (2 uncensored rows)
     diveReflex                not admitted  gain +0.00   not estimable (2 uncensored rows)
     recovery                  not admitted  gain +0.00   not estimable (2 uncensored rows)
@@ -272,17 +273,18 @@ series; a timer end, the floor, an abort or a series hold is a lower bound.
 Markers are computed for all 235 performed holds (measurements, always shown). Axes are medians
 over holds of 60 s or more before the as-of date, imported holds only when confirmed, pooled
 across lung modes (the per-oximeter split below is the harness's only).
+No axis scores how low SpO₂ went (nadir#703, #706): the low is a per-hold marker only, and the
+hypoxicTolerance axis is removed by decision. desaturationRate is the app's HoldOxygenDrop rate.
 Unweighted in this run: no half-life is in use.
 
   axis                  value  holds effective         stamina           pm100  gate
   co2Tolerance          0.795     58      58.0       0.907 (1)      0.796 (30)  enough
   urgeOnset               134     58      58.0         291 (1)        116 (30)  enough
-  hypoxicTolerance         75     49      49.0          69 (9)         75 (40)  enough
-  desaturationRate      -17.1     45      45.0       -27.5 (9)      -13.2 (36)  enough
+  desaturationRate         22     12      12.0        13.3 (2)         22 (10)  enough
   diveReflex              0.1     74      74.0     -0.0417 (9)      0.154 (40)  enough
   recovery                 46     29      29.0          35 (8)         53 (21)  enough
-  Units: co2Tolerance first-contraction share of the hold, urgeOnset s, hypoxicTolerance SpO₂ low %,
-  desaturationRate %/min, diveReflex HR drop share, recovery s back to the pre-hold reading.
+  Units: co2Tolerance first-contraction share of the hold, urgeOnset s, desaturationRate points per
+  minute falling (HoldOxygenDrop), diveReflex HR drop share, recovery s back to the pre-hold reading.
 
 6. EVIDENCE GATES (contract §13, §16) AND CALIBRATION
 ----------------------------------------------------
@@ -303,8 +305,7 @@ Unweighted in this run: no half-life is in use.
                                                Not enough data yet: 10 more confirmed FRC holds.
   axis.co2Tolerance       enough              -  {"holdsWithContractions": 58}
   axis.urgeOnset          enough              -  {"holdsWithContractions": 58}
-  axis.hypoxicTolerance   enough              -  {"holdsWithSpO2": 49}
-  axis.desaturationRate   enough              -  {"holdsWithSpO2": 45}
+  axis.desaturationRate   enough              -  {"holdsWithSpO2": 12}
   axis.diveReflex         enough              -  {"holdsWithSpO2": 74}
   axis.recovery           enough              -  {"holdsWithSpO2": 29}
   pb.full                 waiting          0.65  {"maxAttempts.full": 2, "censored": 14}

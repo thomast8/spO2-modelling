@@ -77,18 +77,6 @@ def gated_axes(sessions, as_of, h, floors=None):
     }
 
 
-def hypoxic_for_physiology(sessions, cfg):
-    """The hypoxicTolerance axis as of tNow + 1 s when personalisation is on and the axis is
-    ready; None otherwise (`HoldModel.swift` passes the same to `physiologyPrior`)."""
-    if not cfg["personalisePhysiology"]:
-        return None
-    fin = finished_sessions(sessions)
-    if not fin:
-        return None
-    t_now = max(started(s) for s in fin)
-    return gated_axes(fin, t_now + timedelta(seconds=1), cfg["halfLifeDays"])["hypoxicTolerance"]
-
-
 def inputs(row, sessions, cfg, tz):
     """(x, a) for a row: admitted covariates and admitted axes, None where missing."""
     x = []

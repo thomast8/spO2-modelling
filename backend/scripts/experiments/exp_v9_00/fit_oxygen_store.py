@@ -104,15 +104,12 @@ def _u(rng, key, n):
     return rng.uniform(e["low"], e["high"], n)
 
 
-def monte_carlo(profile, volumes_sd, personalised=False, n=N_MC, seed=SEED):
-    """Samples of stores; volumes_sd = {v: (litres, log sd)}. `personalised` holds the arterial
-    end saturation at its point value (the diver's own axis replaces it)."""
+def monte_carlo(profile, volumes_sd, n=N_MC, seed=SEED):
+    """Samples of stores; volumes_sd = {v: (litres, log sd)}."""
     rng = np.random.default_rng(seed)
     base = point_constants()
     pe = _u(rng, "peto2_end_mmhg", n)
     sa_end = severinghaus_spo2(pe) / 100
-    if personalised:
-        sa_end = np.full(n, base["arterialSaturationEnd"])
     sex = profile["sex"]
     draws = {
         "btps": _u(rng, "btps_to_stpd_sea_level", n),
@@ -157,7 +154,6 @@ def fit_constants(spiro, ratios, out=None):
     ref = REFERENCE
     vols = volumes_for(ref, spiro, ratios)
     mc = monte_carlo(ref, vols)
-    mcp = monte_carlo(ref, vols, personalised=True)
     probe = dict(c, arterialFraction=1.0)
     cap_d_a = stores(probe, ref, {"full": vols["full"][0]})["blood"]
     probe["arterialFraction"] = 0.0
@@ -171,7 +167,9 @@ def fit_constants(spiro, ratios, out=None):
     med_t = float(np.median(mc["T"]["full"]))
     c["restingVO2PerKg"] = 60 * usable / (med_t * ref["weightKg"] * c["diveReflexFactor"])
     c["sigmaMC"] = float(np.std(np.log(mc["T"]["full"])))
-    c["sigmaMCPersonalised"] = float(np.std(np.log(mcp["T"]["full"])))
+    # Personalising the end saturation by the diver's own lows is removed by decision (nadir#703,
+    # #706: a low is never scored). The field stays for the parked Swift type and is unused.
+    c["sigmaMCPersonalised"] = c["sigmaMC"]
     c["sigmaFloor"] = math.sqrt(1 - value("r2_lung_volume_single_predictor")) * value(
         "sigma_pop_ln_static"
     )
@@ -180,20 +178,16 @@ def fit_constants(spiro, ratios, out=None):
     return c
 
 
-def physiology_prior(constants, profile, spiro, ratios, hypoxic_tolerance=None):
+def physiology_prior(constants, profile, spiro, ratios):
     """{v: (ln T_phys,v, σ_phys)} for the hold model, or None when the profile cannot give it.
 
-    With the diver's hypoxicTolerance axis (SpO₂ %), §12 personalisation: it replaces the
-    population arterial end saturation (/100) and the personalised spread applies.
+    Population constants only: nothing about how low the diver's own SpO₂ went enters it.
     """
     vols = volumes_for(profile, spiro, ratios)
     if vols is None or profile.get("weightKg") is None:
         return None
-    c, sigma = constants, max(constants["sigmaMC"], constants["sigmaFloor"])
-    if hypoxic_tolerance is not None:
-        c = dict(constants, arterialSaturationEnd=hypoxic_tolerance / 100)
-        sigma = max(constants["sigmaMCPersonalised"], constants["sigmaFloor"])
-    t = stores(c, profile, {v: lv for v, (lv, _) in vols.items()})["T"]
+    sigma = max(constants["sigmaMC"], constants["sigmaFloor"])
+    t = stores(constants, profile, {v: lv for v, (lv, _) in vols.items()})["T"]
     return {v: (math.log(t[v]), sigma) for v in t}
 
 
@@ -256,8 +250,10 @@ def report(c, mc, spiro, ratios, out):
         "the value reproduces the median blood store)"
     )
     out.append(
-        f"    sigmaMC {c['sigmaMC']:.3f}, personalised {c['sigmaMCPersonalised']:.3f}, floor "
-        f"{c['sigmaFloor']:.3f} (= sqrt(1 − 0.29)·0.30, derived)"
+        f"    sigmaMC {c['sigmaMC']:.3f}, floor {c['sigmaFloor']:.3f} (= sqrt(1 − 0.29)·0.30, "
+        "derived). Personalising\n    the physiology by the diver's own SpO₂ lows is removed by "
+        "decision (nadir#703, #706); sigmaMCPersonalised\n    is emitted equal to sigmaMC only "
+        "to keep the parked Swift type, and personalisePhysiology is false."
     )
     u = mc["usable"]["full"]
     lo, mid, hi = (float(np.percentile(u, q)) / 1000 for q in (10, 50, 90))

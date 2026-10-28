@@ -111,6 +111,9 @@ def axes_section(sessions, t_now, h, out):
         "Axes are medians\nover holds of 60 s or more before the as-of date, imported holds only "
         "when confirmed, pooled\nacross lung modes (the per-oximeter split below is the harness's "
         "only).\n"
+        + "No axis scores how low SpO₂ went (nadir#703, #706): the low is a per-hold marker only, "
+        "and the\nhypoxicTolerance axis is removed by decision. desaturationRate is the app's "
+        "HoldOxygenDrop rate.\n"
         + (
             "Unweighted in this run: no half-life is in use."
             if h is None
@@ -147,8 +150,9 @@ def axes_section(sessions, t_now, h, out):
             f"{parts[1]:>14}  {'enough' if g.enough else g.summary}"
         )
     out.append(
-        "  Units: co2Tolerance first-contraction share of the hold, urgeOnset s, hypoxicTolerance "
-        "SpO₂ low %,\n  desaturationRate %/min, diveReflex HR drop share, recovery s back to the "
+        "  Units: co2Tolerance first-contraction share of the hold, urgeOnset s, desaturationRate "
+        "points per\n  minute falling (HoldOxygenDrop), diveReflex HR drop share, recovery s back "
+        "to the "
         "pre-hold reading."
     )
     out.append("")

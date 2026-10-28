@@ -401,32 +401,10 @@ def test_profile_gates_follow_identifiers_and_skip_tlc_without_fields():
     assert o2.summary == "Not enough data yet: needs your date of birth, height, sex and weight."
 
 
-def test_personalised_physiology_replaces_end_saturation_and_spread():
-    from fit_oxygen_store import physiology_prior, point_constants, stores
-    from static_volumes import ratios_literal
-
-    c = dict(point_constants(), arterialFraction=0.6, sigmaMC=0.3, sigmaMCPersonalised=0.2)
-    c["sigmaFloor"] = 0.25
-    prof = {"sex": "male", "age": 35, "heightCm": 180, "weightKg": 75}
-    prof["measured"] = {"vc": 6.0, "tlc": 7.5}
-    pop = physiology_prior(c, prof, None, ratios_literal())
-    own = physiology_prior(c, prof, None, ratios_literal(), 60.0)
-    assert pop["full"][1] == 0.3 and own["full"][1] == 0.25
-    expected = stores(dict(c, arterialSaturationEnd=0.6), prof, {"full": 7.5})["T"]["full"]
-    assert own["full"][0] == math.log(expected) and own["full"][0] != pop["full"][0]
-
-
 @pytest.mark.parametrize(
     ("z", "rel"),
-    [
-        (-5.0, 1e-12),
-        (-10.0, 1e-12),
-        (-37.0, 1e-12),
-        (-0.5, 1e-12),
-        (2.0, 1e-12),
-        (35.0, 1e-10),
-    ],  # z ≥ 30 is the truncated asymptotic series
-)
+    [(-5.0, 1e-12), (-10.0, 1e-12), (-37.0, 1e-12), (-0.5, 1e-12), (2.0, 1e-12), (35.0, 1e-10)],
+)  # z ≥ 30 is the truncated asymptotic series
 def test_log_survival_against_mpmath(z, rel):
     import mpmath
 
@@ -458,7 +436,7 @@ def test_admitted_inputs_get_coefficients_through_fit_and_emit():
 
     sessions = corpus()
     cfg = base_config(None)
-    cfg["covariates"], cfg["axes"] = ["logDaysSinceLastSession"], ["hypoxicTolerance"]
+    cfg["covariates"], cfg["axes"] = ["logDaysSinceLastSession"], ["diveReflex"]
     cfg = with_coefficients(sessions, cfg)
     assert len(cfg["beta"]) == 1 and len(cfg["gamma"]) == 1
     assert len(cfg["betaCov"]) == 1 and len(cfg["gammaCov"][0]) == 1
@@ -475,7 +453,7 @@ def test_admitted_inputs_get_coefficients_through_fit_and_emit():
         "test",
     )
     assert 'covariates: ["logDaysSinceLastSession"]' in text and "beta: []" not in text
-    assert 'axes: ["hypoxicTolerance"]' in text and "gamma: []" not in text
+    assert 'axes: ["diveReflex"]' in text and "gamma: []" not in text
 
 
 def test_measured_tlc_spreads_are_the_ratio_sds():
@@ -488,3 +466,88 @@ def test_measured_tlc_spreads_are_the_ratio_sds():
     est = static_volumes({**prof, "measured": {"vc": 6.0}}, None, ratios)
     assert est["TLC"][1] == ratios["tlcLogSD"]
     assert est["FRC"][1] == math.hypot(ratios["tlcLogSD"], ratios["frcLogSD"])
+
+
+# ---------------------------------------------------------------- HoldOxygenDrop (Swift tests)
+
+
+def drop_session(oxygen, style="full"):
+    """HoldOxygenDropTests.session: 3 s breathe at 100, then a 30 s hold, a reading a second."""
+    return [
+        st("breathe", 3, [v(t, 100.0) for t in range(3)]),
+        st("hold", 30, [v(t, x) for t, x in enumerate(oxygen)], style=style),
+    ]
+
+
+def test_drop_onset_and_rate_from_one_capped_baseline():
+    from features import hold_oxygen_drop
+
+    onset, rate = hold_oxygen_drop(1, drop_session([99 - t * 0.1 for t in range(31)]))
+    assert onset == 20 and abs(rate - 6) < 1e-4
+    onset, rate = hold_oxygen_drop(1, drop_session([99 - t * 0.2 for t in range(31)], "rv"))
+    assert onset == 10 and abs(rate - 12) < 1e-4
+
+
+def test_drop_needs_two_consecutive_seconds_and_averages_repeated_callbacks():
+    from features import hold_oxygen_drop
+
+    steps = drop_session([99, 96, 99, 98, 97, 96, 95, 94])
+    steps[1]["vitals"] += [v(1, 96.0) for _ in range(20)]
+    assert hold_oxygen_drop(1, steps) == (4, 60.0)
+
+
+def test_drop_missing_onset_or_sparse_baseline_is_none():
+    from features import hold_oxygen_drop
+
+    assert hold_oxygen_drop(1, drop_session([99, 99, 99, 99, 99])) is None
+    sparse = drop_session([99, 97, 96, 95, 94])
+    sparse[0]["vitals"].pop()
+    assert hold_oxygen_drop(1, sparse) is None
+    assert hold_oxygen_drop(0, sparse[1:]) is None
+
+
+def test_drop_gap_before_confirmation_hides_onset_after_it_hides_rate():
+    from features import hold_oxygen_drop
+
+    before = drop_session([99, 98, 97, 96, 95, 94, 93])
+    before[1]["vitals"] = [x for x in before[1]["vitals"] if x["at"] != 1]
+    assert hold_oxygen_drop(1, before) is None
+    after = drop_session([99, 98, 97, 96, 95, 94, 93])
+    after[1]["vitals"] = [x for x in after[1]["vitals"] if x["at"] != 4]
+    assert hold_oxygen_drop(1, after) == (2, None)
+
+
+def test_drop_rejects_contact_loss_and_out_of_range_readings():
+    from features import hold_oxygen_drop
+
+    steps = drop_session([99, 98, 97, 96, 95, 94])
+    steps[0]["vitals"] += [v(2, float("nan")), v(2, 110.0), v(2, 50.0, contact=False)]
+    steps[1]["vitals"] += [v(-1, 20.0), v(31, 20.0)]
+    assert hold_oxygen_drop(1, steps)[0] == 2
+    steps[1]["vitals"][2]["contactDetected"] = False
+    assert hold_oxygen_drop(1, steps) is None
+
+
+def test_drop_rate_needs_four_seconds_ending_at_the_first_low_inside_the_hold():
+    from features import hold_oxygen_drop
+
+    steps = drop_session([99, 97, 96, 95]) + [st("breathe", 10, [v(1, 70.0)])]
+    assert hold_oxygen_drop(1, steps) == (1, None)
+
+
+def test_drop_baseline_does_not_reach_past_the_previous_hold():
+    from features import hold_oxygen_drop
+
+    steps = drop_session([99, 98, 97, 96, 95, 94])
+    steps += [st("breathe", 2, [v(0, 99.0)]), copy.deepcopy(steps[1])]
+    assert hold_oxygen_drop(1, steps) is not None
+    assert hold_oxygen_drop(3, steps) is None
+
+
+def test_no_axis_scores_how_low_spo2_went():
+    from features import AXES, hold_markers
+
+    assert "hypoxicTolerance" not in AXES and "spo2Low" not in AXES.values()
+    assert AXES["desaturationRate"] == "desaturationRatePerMin"
+    marks = hold_markers(session(drop_session([99 - t * 0.2 for t in range(31)])))
+    assert marks[0]["spo2Low"] == 93 and abs(marks[0]["desaturationRatePerMin"] - 12) < 1e-4
