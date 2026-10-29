@@ -70,8 +70,8 @@ write-up was corrected to say so before this file was written.
 A later fit should treat a frozen run as missing rather than as a plateau in SaO2. With the
 stricter rule (a run of 8 s or more followed by a step of 3 or more; the run is masked):
 
-  masimo    14 QC-passing holds,  2951 s of trace,  34 s masked (1.2 %), 4 holds touched
-  pm100     26 QC-passing holds,  5436 s of trace,  68 s masked (1.3 %), 6 holds touched
+  masimo    14 QC-passing holds,  2954 s of trace,  34 s masked (1.2 %), 4 holds touched
+  pm100     26 QC-passing holds,  5264 s of trace,  61 s masked (1.2 %), 5 holds touched
 
 `freeze_mask(t, spo2)` in the script is the rule. It removes about one second in eighty on
 either device, so it changes no conclusion in v8.00; it is there so the next fit does not
@@ -81,76 +81,95 @@ have to argue about plateaus.
 3. MODEL-FREE LAG MEASURES (table C)
 ------------------------------------
 
-For every QC-passing hold with at least 15 s of trace after it: nadir delay (seconds from
-the end of the hold to the lowest reading) and onset (seconds from the end of the hold until
-the reading has risen two points above its lowest-so-far). Medians with 95 % bootstrap
-intervals over holds:
+For every QC-passing hold with at least 15 s of recording after it (timestamps, not sample
+counts): nadir delay (seconds from the end of the hold to the lowest reading) and onset
+(seconds from the end of the hold until the reading has risen two points above its lowest,
+looking only after the last time that lowest value is reached, so a bounce before a deeper
+nadir is not an onset). Medians with 95 % bootstrap intervals that resample whole recording
+sessions, not holds; n is holds, s is sessions, and no interval is given below three sessions:
 
-  group                   n   nadir delay (s)      onset (s)
-  masimo, all            13   23 [19, 27]          29 [25, 37]   n=13
-  pm100, all             24   24 [16, 31]          37 [35, 42]   n=20
-  masimo, FL              3   29 [23, 31]          37 [29, 38]   n=3
-  pm100, FL               6   21 [ 6, 26]          36 [27, 39]   n=4
-  masimo, RV              8   20 [16, 25]          26 [22, 31]   n=8
-  pm100, RV              18   26 [16, 34]          38 [35, 47]   n=16
-  masimo, RV, 90-140 s    6   20 [14, 25]          27 [19, 32]   n=6
-  pm100, RV, 90-140 s    13   27 [16, 39]          37 [35, 47]   n=11
+  group                   n  nadir delay (s)         onset (s)
+  masimo, all            13  23 [20, 30]  s=3       29 [27, 38]  n=13 s=3
+  pm100, all             19  27 [16, 39]  s=6       37 [35, 47]  n=16 s=6
+  masimo, FL              3  29 [n/a]     s=2       37 [n/a]     n=3  s=2
+  pm100, FL               6  21 [10, 29]  s=4       36 [27, 39]  n=4  s=4
+  masimo, RV              8  20 [n/a]     s=2       26 [n/a]     n=8  s=2
+  pm100, RV              13  33 [26, 40]  s=3       38 [36, 48]  n=12 s=3
+  masimo, RV, 90-140 s    6  20 [n/a]     s=2       27 [n/a]     n=6  s=2
+  pm100, RV, 90-140 s    10  32 [26, 40]  s=3       38 [36, 48]  n=10 s=3
 
-Four PM100 holds have no onset because the trace ends first (4 September FL5 and 5 September
-FL2 at 20 s, 2 October RV7 and RV9 at 23 and 19 s); they count in the nadir-delay medians
-and not in the onset medians, so the PM100 onset medians are biased short, which works
-against the difference below, not for it.
+Three PM100 holds have no onset because the trace ends first (4 September RV3 at 43 s of
+recording, 4 September FL5 and 5 September FL2 at 20 s); they count in the nadir-delay medians
+and not in the onset medians, so the PM100 onset medians are biased short.
 
-RV is the one lung volume both devices recorded in numbers (full-lung: 3 Masimo holds
-against 6 PM100, too thin to compare). Within RV at matched hold length the onset of the
-recovery rise comes about ten seconds later on the PM100 (37 against 27 s) with
-non-overlapping intervals, while the nadir delay differs by seven seconds with overlapping
-ones. The PM100's nadir delay also spreads far wider (1 to 47 s against 10 to 35 s); the
-widest values are one session (12 October, 39 to 47 s).
+The device comparison does not survive the change to session-level resampling as an
+inferential result. RV is the one lung volume both devices recorded in numbers, and within it
+the Masimo holds come from two sessions (seven on 6 August, one on 21 February) and the PM100
+holds from three (4 September, 12 and 16 October). The point estimates still differ in the
+same direction: onset of the recovery rise about eleven seconds later on the PM100 (38 against
+26 s) and nadir delay thirteen seconds later (32 to 33 against 20 s). But the Masimo RV
+interval cannot be estimated from two sessions, the PM100 one rests on three, and over all
+holds the intervals overlap (onset 29 [27, 38] against 37 [35, 47]; nadir delay 23 [20, 30]
+against 27 [16, 39]). The earlier statement that the intervals do not overlap came from
+resampling holds, which treats the seven holds of one afternoon as seven independent
+observations; it should not be repeated. What these recordings support is that the PM100 sessions
+sit later than the Masimo sessions in the sessions available, not that the devices differ.
+The PM100's nadir delay also spreads far wider (1 to 47 s against 10 to 35 s); the widest
+values are one session (12 October, 39 to 47 s).
+
+Against the first version of this file the hold counts also changed (PM100 24 to 19, 18 to 13
+within RV), because the merged loader no longer keeps the 2 October holds that were attached
+to the wrong session or second. That, not the onset or coverage fixes, moved the PM100 medians
+(nadir delay 24 to 27, RV 26 to 33); the onset fix removed one onset (4 September RV3, whose
+earlier 21 s was a bounce before its nadir at 33 s).
 
 Nadir delay against the slope over the last 30 s of the hold: a pure delay gives the same
 nadir delay whatever the slope, a low-pass does not. Pearson r is +0.08 on the Masimo
-(13 holds) and -0.35 on the PM100 (24 holds), but leaving one session out moves the PM100
-value between -0.58 and -0.02, and it is -0.02 without 12 October. One session carries it,
+(13 holds) and -0.33 on the PM100 (19 holds), but leaving one session out moves the PM100
+value between -0.63 and +0.01, and it is +0.01 without 12 October. One session carries it,
 so nothing is claimed about kernel form.
 
-Heart rate as a covariate: onset = 32 s + 8 s if PM100 + 4 s per %/s of end slope, residual
-sd 9 s, and the residual's correlation with end-of-hold heart rate is r = -0.22 over 33
-holds. Reported, not modelled: with 13 and 20 holds and the sign of simpler correlations
+Heart rate as a covariate: onset = 30 s + 9 s if PM100 + 0 s per %/s of end slope, residual
+sd 8 s, and the residual's correlation with end-of-hold heart rate is r = -0.09 over 29
+holds. Reported, not modelled: with 13 and 16 holds and the sign of simpler correlations
 flipping between devices, there is no HR-dependent lag to put in a model.
 
 
 4. POST-HOLD SENSOR FIT (table D)
 ---------------------------------
 
-One small parametric fit per device on the holds with at least 45 s of trace after the end
-(Masimo 4, PM100 11), window the last 30 s of the hold plus the recovery. Latent: the
-end-of-hold descent continues for T seconds, sits on a floor for P seconds, then rises
-exponentially to the pre-hold baseline with a per-hold time constant tau_r. Sensor: a
-first-order low-pass with time constant tau_s. T, P and tau_s shared per device, bootstrapped
-over holds (200 resamples); tau_s profiled on a grid.
+One small parametric fit per device on the holds with at least 45 s of recording after the
+end (Masimo 4 holds in 2 sessions, PM100 8 in 3), window the last 30 s of the hold plus the
+recovery. Latent: the end-of-hold descent continues for T seconds, sits on a floor for P
+seconds, then rises exponentially to the pre-hold baseline with a per-hold time constant
+tau_r. Sensor: a first-order low-pass with time constant tau_s. T, P and tau_s shared per
+device, bootstrapped over whole sessions (200 resamples); tau_s profiled on a grid.
 
-  device   n   T (s)              P (s)              tau_s (s)          tau_r median  RMSE
-  masimo   4   13.8 [ 9.1, 27.9]  23.6 [ 5.9, 36.2]   2.7 [0.5, 2.8]      7.7 s       4.56
-  pm100   11   16.8 [ 9.5, 34.2]  21.8 [ 0.0, 33.8]   3.2 [1.2, 4.8]     20.1 s       5.37
+  device   n  s  T (s)              P (s)              tau_s (s)         tau_r median  RMSE
+  masimo   4  2  13.8 [n/a]         23.6 [n/a]         2.7 [n/a]          7.7 s       4.56
+  pm100    8  3  17.3 [11.3, 19.1]  20.6 [19.2, 27.6]  3.9 [2.6, 4.2]    16.6 s       6.02
 
-  The Masimo row rests on four holds; its intervals are bootstrap resamples of four.
+  The Masimo fit has two sessions, so no interval is reported. The PM100 intervals come from
+  resampling three sessions, which allows only a handful of distinct resamples; they are
+  narrower than the earlier hold-level ones (T 8.9 to 38.4 s) because of that, not because the
+  parameters are better known, and should not be read as precision.
 
   tau_s profile, RMSE at fixed tau_s:
   masimo   1s 4.64   2s 4.59   4s 4.63   8s 5.45   12s 6.54   16s 7.61   24s 9.59   32s 11.15
-  pm100    1s 5.41   2s 5.38   4s 5.37   8s 5.56   12s 5.91   16s 6.48   24s 7.79   32s  8.95
+  pm100    1s 6.10   2s 6.06   4s 6.02   8s 6.18   12s 6.49   16s 7.12   24s 8.57   32s  9.86
 
 What this fit suggests: within this latent form the sensor's own smoothing is short. The
 profile is flat below 4 s and the fit is worse at every tau_s above 8 s on both devices. A
 profile under a model that does not fit is not a bound, so this is suggested, not
-established. What it cannot say: T and P separately. Their
-intervals span 9 to 34 s and 0 to 36 s and move against each other; only their sum, the
-onset of the rise (about 37 s here), is pinned, and section 3 measures that directly. The
+established. What it cannot say: T and P separately. Resampling
+holds, they spanned 9 to 38 s and 0 to 35 s and moved against each other, and at session level
+they cannot be bounded at all; only their sum, the onset of the rise (about 38 s on both
+devices), is pinned, and section 3 measures that directly. The
 first version of this fit, without the floor, drew a V through every recovery and scored
 RMSE 5.4; adding the floor helped the Masimo holds and not the PM100 ones. The plots in
 results/posthold-*.png show why: holds differ in when the fall stops and when the rise
 begins by 20 to 30 s, and one shared T and P per device cannot follow that. An RMSE of 4.6
-to 5.4 points on a signal quantised to 1 is a model that does not fit, and it is reported
+to 6.0 points on a signal quantised to 1 is a model that does not fit, and it is reported
 as one.
 
 
@@ -162,14 +181,14 @@ Identifiable from these recordings:
   - That the plateau-and-step pattern inside holds is the same on both devices, and that
     the PM100's extra freezes are in activity wear and go with contact loss (section 1).
   - A masking rule for frozen runs and its cost, about 1.2 % of hold-seconds (section 2).
-  - A device difference in the onset of the recovery rise within RV at matched hold length,
-    about ten seconds later on the PM100, with a bootstrap interval that excludes the
-    Masimo's (section 3). Device, month, finger and training phase are confounded, so this
-    is a difference between the recording periods that is consistent with a device
-    difference, not a device property.
 
 Suggested, not established:
 
+  - A later recovery onset on the PM100 within RV, about eleven seconds at matched hold
+    length (38 against 26 s). With two Masimo and three PM100 sessions in RV the bootstrap
+    over sessions gives no Masimo interval and overlapping ones overall, so this is a
+    direction in the point estimates, not a difference. Device, month, finger and training
+    phase are confounded in any case (section 3).
   - That the sensor's own low-pass is short, under 8 s, on both devices: a profile under a
     latent form that does not fit (section 4).
 
@@ -186,8 +205,8 @@ Not identifiable:
     Nadir drops the quality.
 
 So there is no per-device sensor model to carry into v8 yet. What there is: a cleaning rule,
-a device offset of about ten seconds in recovery onset to treat as a nuisance parameter per
-recording period, and a suggestion that the smoothing is short. A model of the hold itself that uses these
+a possible device offset of about ten seconds in recovery onset, to be treated as a nuisance
+parameter per recording period until sessions with both oximeters exist, and a suggestion that the smoothing is short. A model of the hold itself that uses these
 should treat the sensor as "delay about 25 to 40 s, smoothing under 8 s, integer output,
 occasional freezes masked" and fit the delay per hold, which is what v7's delta_h was doing
 by another name.

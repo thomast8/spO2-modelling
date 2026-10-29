@@ -8,13 +8,13 @@ Four questions, each answered with the smallest thing that can answer it:
   B. A freeze mask: the rule a later fit would use to treat frozen samples as missing, and
      how many hold-seconds it removes per device.
   C. Model-free lag measures per hold (nadir delay, onset of the recovery rise) by device,
-     within RV where both devices have tables, with bootstrap intervals; the dependence of
-     nadir delay on the end-of-hold slope, with each session left out in turn; heart rate
-     as a covariate on the onset, reported and not modelled.
+     within RV where both devices have tables, with bootstrap intervals over sessions; the
+     dependence of nadir delay on the end-of-hold slope, with each session left out in turn;
+     heart rate as a covariate on the onset, reported and not modelled.
   D. One small post-hold sensor fit per device: the descent continues for a combined
      transit-plus-delay T, then rises exponentially (per-hold time constant); the sensor is
      a first-order low-pass tau_s. T and tau_s are shared per device, bootstrapped over
-     holds, and tau_s is profiled because it trades against the latent rise.
+     whole sessions, and tau_s is profiled because it trades against the latent rise.
 
 Usage:
     cd backend && uv run python scripts/experiments/exp_v8_01/exp_v8_01_sensor.py \
@@ -38,6 +38,7 @@ from nadir_export import load, qc  # noqa: E402
 
 OUT = HERE / "results"
 RNG = np.random.default_rng(42)
+BOOT_FITS = 200
 
 
 def device(meta):
@@ -171,11 +172,24 @@ def freeze_summary(holds, out):
 # ---------------------------------------------------------------- C. lag measures
 
 
+def recovery_coverage(h):
+    """Seconds of recording after the end of the hold, from timestamps (not sample counts)."""
+    return float(h["t_recovery"][-1] - h["t_end"]) if len(h["t_recovery"]) else 0.0
+
+
+def recovery_onset(t, s, te):
+    """Seconds after `te` of the first reading 2 points above the recovery minimum, looking only
+    after the last time that minimum is reached; None if the trace ends first."""
+    after, ta = s[t > te], t[t > te]
+    if not len(after):
+        return None
+    last_min = np.flatnonzero(after == after.min())[-1]
+    rise = np.flatnonzero(after[last_min + 1 :] - after.min() >= 2)
+    return float(ta[last_min + 1 + rise[0]] - te) if len(rise) else None
+
+
 def lag_measures(h):
     t, s, hr, te = h["t"], h["spo2"], h["hr"], h["t_end"]
-    after, ta = s[t > te], t[t > te]
-    running_min = np.minimum.accumulate(after)
-    rise = np.where(after - running_min >= 2)[0]
     before = (t > te - 30) & (t <= te)
     return {
         "id": h["id"],
@@ -185,21 +199,41 @@ def lag_measures(h):
         "duration": h["meta"]["duration"],
         "nadir": float(s.min()),
         "nadir_delay": float(t[np.argmin(s)] - te),
-        "onset": float(ta[rise[0]] - te) if len(rise) else None,
+        "onset": recovery_onset(t, s, te),
         "end_slope": float((s[before][-1] - s[before][0]) / 30),
         "hr_end": float(np.nanmean(hr[(t > te - 10) & (t <= te)])),
-        "recovery_s": float(len(h["t_recovery"])),
+        "recovery_s": recovery_coverage(h),
     }
 
 
-def boot_median(x, n=2000):
+MIN_SESSIONS = 3
+
+
+def resample_sessions(sessions):
+    """Indices into `sessions` for one cluster bootstrap draw: whole sessions, with replacement."""
+    sessions = np.asarray(sessions)
+    names = np.unique(sessions)
+    pick = RNG.choice(names, len(names))
+    return np.concatenate([np.flatnonzero(sessions == n) for n in pick])
+
+
+def boot_median(x, sessions, n=2000):
+    """Median and 95 % interval, resampling whole sessions; the interval is NaN below
+    MIN_SESSIONS sessions, where a bootstrap over sessions says nothing."""
     x = np.asarray(x, float)
-    meds = [np.median(RNG.choice(x, len(x))) for _ in range(n)]
-    return np.median(x), np.percentile(meds, 2.5), np.percentile(meds, 97.5)
+    med = np.median(x)
+    if len(np.unique(sessions)) < MIN_SESSIONS:
+        return med, np.nan, np.nan
+    meds = [np.median(x[resample_sessions(sessions)]) for _ in range(n)]
+    return med, np.percentile(meds, 2.5), np.percentile(meds, 97.5)
+
+
+def interval(lo, hi, fmt):
+    return "[ n/a ]" if np.isnan(lo) else f"[{lo:{fmt}}, {hi:{fmt}}]"
 
 
 def lag_section(measures, out):
-    out.append("C. MODEL-FREE LAG MEASURES (holds with at least 15 s of trace after the end)")
+    out.append("C. MODEL-FREE LAG MEASURES (holds with at least 15 s of recording after the end)")
     out.append("")
     out.append(
         f"  {'hold':<18}{'device':<8}{'type':<5}{'dur':>5}{'nadir':>6}{'nadir delay':>12}"
@@ -214,9 +248,12 @@ def lag_section(measures, out):
             f"{m['recovery_s']:>6.0f}"
         )
     out.append("")
-    out.append("  Medians with 95 % bootstrap intervals over holds:")
+    out.append(
+        f"  Medians with 95 % bootstrap intervals, resampling whole sessions (n = holds, s ="
+        f" sessions; no interval below {MIN_SESSIONS} sessions):"
+    )
     out.append("")
-    out.append(f"  {'group':<22}{'n':>3}  {'nadir delay (s)':<24}{'onset (s)':<24}")
+    out.append(f"  {'group':<22}{'n':>3}  {'nadir delay (s)':<30}{'onset (s)':<30}")
     for label, sel in [
         ("masimo, all", lambda m: m["device"] == "masimo"),
         ("pm100, all", lambda m: m["device"] == "pm100"),
@@ -236,15 +273,18 @@ def lag_section(measures, out):
         g = [m for m in measures if sel(m)]
         if len(g) < 3:
             continue
-        nd = boot_median([m["nadir_delay"] for m in g])
-        on = [m["onset"] for m in g if m["onset"] is not None]
-        nd_s = f"{nd[0]:4.0f} [{nd[1]:3.0f}, {nd[2]:3.0f}]"
-        if len(on) >= 3:
-            om = boot_median(on)
-            on_s = f"{om[0]:4.0f} [{om[1]:3.0f}, {om[2]:3.0f}] n={len(on)}"
+        nd = boot_median([m["nadir_delay"] for m in g], [m["session"] for m in g])
+        og = [m for m in g if m["onset"] is not None]
+        nd_s = f"{nd[0]:4.0f} {interval(nd[1], nd[2], '3.0f')} s={len({m['session'] for m in g})}"
+        if len(og) >= 3:
+            om = boot_median([m["onset"] for m in og], [m["session"] for m in og])
+            on_s = (
+                f"{om[0]:4.0f} {interval(om[1], om[2], '3.0f')} n={len(og)}"
+                f" s={len({m['session'] for m in og})}"
+            )
         else:
             on_s = "-"
-        out.append(f"  {label:<22}{len(g):>3}  {nd_s:<24}{on_s:<24}")
+        out.append(f"  {label:<22}{len(g):>3}  {nd_s:<30}{on_s:<30}")
     censored = [m for m in measures if m["onset"] is None]
     if censored:
         out.append(
@@ -357,7 +397,7 @@ def fit_device(holds, tau_s_fixed=None):
 
 
 def sensor_section(holds, out):
-    out.append("D. POST-HOLD SENSOR FIT (holds with at least 45 s of trace after the end)")
+    out.append("D. POST-HOLD SENSOR FIT (holds with at least 45 s of recording after the end)")
     out.append("")
     out.append(
         "  Latent SaO2: the last-30-s descent continues for T seconds past the end of the hold,"
@@ -372,16 +412,18 @@ def sensor_section(holds, out):
     out.append("")
     results = {}
     for dev in ("masimo", "pm100"):
-        hs = [h for h in holds if device(h["meta"]) == dev and len(h["t_recovery"]) >= 45]
+        hs = [h for h in holds if device(h["meta"]) == dev and recovery_coverage(h) >= 45]
         if len(hs) < 3:
             out.append(f"  {dev}: only {len(hs)} holds with 45 s of recovery; skipped")
             continue
         fit = fit_device(hs)
+        sessions = [h["meta"]["session"] for h in hs]
+        n_sessions = len(set(sessions))
         boots = []
-        for _ in range(200):
-            idx = RNG.choice(len(hs), len(hs))
-            b = fit_device([hs[i] for i in idx])
-            boots.append((b["T"], b["P"], b["tau_s"]))
+        if n_sessions >= MIN_SESSIONS:
+            for _ in range(BOOT_FITS):
+                b = fit_device([hs[i] for i in resample_sessions(sessions)])
+                boots.append((b["T"], b["P"], b["tau_s"]))
         boots = np.array(boots)
         profile = []
         for tau_s in (1, 2, 4, 8, 12, 16, 24, 32):
@@ -391,12 +433,17 @@ def sensor_section(holds, out):
             "boot": boots.tolist(),
             "profile": profile,
             "holds": [h["id"] for h in hs],
+            "sessions": sorted(set(sessions)),
         }
-        lo, hi = np.percentile(boots, 2.5, axis=0), np.percentile(boots, 97.5, axis=0)
+        if len(boots):
+            lo, hi = np.percentile(boots, 2.5, axis=0), np.percentile(boots, 97.5, axis=0)
+        else:
+            lo = hi = np.full(3, np.nan)
         out.append(
-            f"  {dev:<8} n={len(hs):>2}  T = {fit['T']:4.1f} s [{lo[0]:4.1f}, {hi[0]:4.1f}]"
-            f"  P = {fit['P']:4.1f} s [{lo[1]:4.1f}, {hi[1]:4.1f}]"
-            f"  tau_s = {fit['tau_s']:4.1f} s [{lo[2]:4.1f}, {hi[2]:4.1f}]"
+            f"  {dev:<8} n={len(hs):>2} s={n_sessions}"
+            f"  T = {fit['T']:4.1f} s {interval(lo[0], hi[0], '4.1f')}"
+            f"  P = {fit['P']:4.1f} s {interval(lo[1], hi[1], '4.1f')}"
+            f"  tau_s = {fit['tau_s']:4.1f} s {interval(lo[2], hi[2], '4.1f')}"
             f"  tau_r median {np.median(fit['tau_r']):4.1f} s  RMSE {fit['rmse']:.2f}"
         )
         out.append(
@@ -461,7 +508,7 @@ def main():
         )
         out.append("")
     freeze_summary(holds, out)
-    measures = [lag_measures(h) for h in holds if len(h["t_recovery"]) >= 15]
+    measures = [lag_measures(h) for h in holds if recovery_coverage(h) >= 15]
     lag_section(measures, out)
     sensor = sensor_section(holds, out)
 
