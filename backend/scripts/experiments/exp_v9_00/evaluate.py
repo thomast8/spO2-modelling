@@ -16,16 +16,17 @@ import math
 from datetime import timedelta
 from pathlib import Path
 
-from archive import HARNESS_TIME_ZONE, is_performed_hold, load_all, started
+from archive import HARNESS_TIME_ZONE, load_all, started
+from capacity import Context as CapacityContext
+from capacity import Distance, capacity_rows
+from capacity import report as capacity_report
 from evidence import DEFAULT_FLOORS, evaluate
 from features import (
     AXES,
     AXIS_UNIT,
     diver_axes,
-    eligible_for_model,
     hold_markers,
     hold_model_rows,
-    lung_mode_of,
     oximeter_key,
 )
 from fit_delay import KEYS
@@ -178,7 +179,7 @@ def run(
         f"Inputs:  Nadir full Export {Path(export).name} ({len(sessions) - len(stamina)} sessions "
         "after dedupe), the 21 February 2026\n         STAmina CSV rebuilt as StaminaImport would, "
         "NHANES 2007-2012 (SPX, DEMO, BMX, SMQ, MCQ).",
-        "Contract: CONTRACT.md (v1 with §10 v2, §16 and §17 packing). Time zone for §9: "
+        "Contract: CONTRACT.md (v1 with §10 v2, §16, §17 packing, §18 capacity). Time zone for §9: "
         f"{HARNESS_TIME_ZONE}.",
         "Labels: the 6 August 2026 relabel (holds 1-8 RV, hold 9 full) is applied as "
         'styleSource "confirmed".',
@@ -217,14 +218,25 @@ def run(
     pk = Packing(profile, o2, spiro, ratios) if o2 is not None else PACKING_NONE
     hm = hold_model_report(sessions, out, physiology=phys, packing=pk)
     packing_report(sessions, out, pk, hm, phys, HARNESS_TIME_ZONE)
+    ctx = CapacityContext(o2, profile, spiro, ratios, pk)
+    cap = capacity_report(sessions, out, hm["config"], ctx, HARNESS_TIME_ZONE)
+    rule = "v5" if cap["compare"]["admitted"] else "v2"
+    hm["config"]["rowRule"] = rule
     ax, axis_gates = axes_section(sessions, t_now, hm["half_life"], out)
 
     out.append("6. EVIDENCE GATES (contract §13, §16) AND CALIBRATION")
     out.append("-" * 52)
     out.append("")
-    cal = calibrate(sessions, hm["config"], delay_prior, phys, out, packing=pk)
-    model = fit(sessions, hm["config"], phys, packing=pk)
-    est = estimates(model, sessions, floors=cal["floors"])
+    cal = calibrate(sessions, hm["config"], delay_prior, phys, out, packing=pk, rule=rule, ctx=ctx)
+    if rule == "v5":
+        dist = Distance(sessions)
+        _, own = ctx.physiology(sessions)
+        rows = capacity_rows(sessions, dist)
+        model = fit(sessions, hm["config"], own, rows=rows, packing=pk)
+    else:
+        model = fit(sessions, hm["config"], phys, packing=pk)
+    est = estimates(model, sessions, floors=cal["floors"], rule=rule)
+    out.append(f"  Shipped row rule: {rule} (§18 chain above); the gates below are its gates.")
     gates = [delay[k]["gate"] for k in KEYS]
     gates += [hold_volume["gate"]]
     gates += [axis_gates[n] for n in AXES]
@@ -246,35 +258,41 @@ def run(
     out.append(f"  Priors.evidence header: {cal['header']}")
     out.append("")
     out += OPEN_CHOICES
-    full = est["full"]["level"]["estimate"]
+
+    def clock(t):
+        return f"{int(t) // 60}:{round(t) % 60:02d}"
+
+    notes = []
+    v2_full = hm["estimates"]["full"]["level"]["estimate"]
     rows = [r for s in sessions for r in hold_model_rows(s) if r["mode"] == "full"]
-    imported = [
-        st["actualDuration"]
-        for s in sessions
-        for st in s["steps"]
-        if is_performed_hold(st) and lung_mode_of(st) == "full" and not eligible_for_model(s, st)
-    ]
-    if full and rows:
-
-        def clock(t):
-            return f"{int(t) // 60}:{round(t) % 60:02d}"
-
+    if v2_full and rows:
         longest = max(r["actual"] for r in rows)
-        unc = [r["actual"] for r in rows if not r["censored"]]
-        out.insert(
-            len(out) - 1,
-            f"  - The full-lung level with censored rows ({clock(full[1])}) sits "
-            f"{'above' if full[1] > longest else 'below'} the longest full-slot row "
-            f"({clock(longest)}). {len(unc)} of the {len(rows)}\n    full-slot rows are "
-            "diver-ended; the rest end at a timer or a series and count only as lower bounds,\n"
-            "    which lift the level. That is why the gate waits on diver-ended attempts."
-            + (
-                f" (The longest full-styled\n    hold anywhere is an unconfirmed STAmina import of "
-                f"{clock(max(imported))}, which the model does not read.)"
-                if imported
-                else ""
-            ),
+        unc = sum(1 for r in rows if not r["censored"])
+        notes.append(
+            f"  - §10 v2: the full-lung level ({clock(v2_full[1])}) sits "
+            f"{'above' if v2_full[1] > longest else 'below'} the longest full-slot row "
+            f"({clock(longest)}); {unc} of the {len(rows)} full-slot\n    rows are diver-ended, "
+            "the rest are lower bounds that lift the level."
         )
+    v5_full = cap["estimates"]["full"]["level"]["estimate"]
+    limit = [r for r in cap["rows"] if r["mode"] == "full" and not r["censored"]]
+    if v5_full and limit:
+        short = sum(1 for r in limit if r["actual"] < 180)
+        notes.append(
+            f"  - §18 v5: the full-lung level ({clock(v5_full[1])}) rests on {len(limit)} holds "
+            f"at the limit (d ≥ 0.8); {short} of them are\n    under 3:00, table holds whose "
+            "struggle share or fall reached the diver's 90th percentile. No rest-before\n    "
+            "covariate is admitted to tell a table limit from a rested one, so they pull the level "
+            "down."
+        )
+    notes += [
+        "  - §18 d: the fall is spo2Baseline − spo2Low (the post-hold trough), both 90th "
+        "percentiles pooled\n    across lung volumes; VO2_d reads only holds of known volume and "
+        "skips holds with no fall.",
+        "  - §18 chain: both rules are scored on the holds v5's own d calls the limit, so the test "
+        "set is v5's\n    choice, not a neutral one.",
+    ]
+    out[len(out) - 1 : len(out) - 1] = notes
     text = "\n".join(out) + "\n"
     if write:
         (HERE / "exp_v9_00_results.txt").write_text(text)
@@ -288,6 +306,7 @@ def run(
         "oxygen_store": o2,
         "physiology": phys,
         "hold_model": hm,
+        "capacity": cap,
         "calibration": cal,
         "gates": gates,
         "axes": ax,

@@ -375,3 +375,44 @@ Lung packing adds air above a full inhale. It is measured, never assumed.
   among uncensored packed rows (else the measured `packs`), as `μ_full + ln(U(V_full + ΔV)/U(V_full))` with
   the full-lung interval; its gate is the full-lung gate plus the packed measurement.
 - Packing efficiency itself is a measurement, always shown with its date, never scored and never a target.
+
+## 18. Capacity from every hold (v5, 29 October)
+
+Thomas's objection to §10: whether the diver pressed stop says little about where the limit was. A
+one-minute hold the diver ended is not a max, and a 7:02 packed hold the diver ended is far more
+informative than a count of attempts. The limit is read from the trace, not from the flag.
+- Per-diver oxygen consumption `VO2_d` replaces the population `restingVO2PerKg · diveReflexFactor ·
+  weight` in §12 when the hold evidence supports it. It is fitted from every performed hold with at
+  least 60 s of trusted SpO₂, maximal or not: for each hold, the usable store at its lung volume
+  (§11, §12, packing §17) and the oxygen the fall implies (store × fraction of the usable
+  desaturation reached, from `spo2Baseline` to `spo2End` against the population end saturation)
+  give a consumption estimate `store_used / duration`. A log-normal prior centred on the population
+  value with sd 0.25 (so the population value stays when evidence is thin); posterior by weighted
+  mean of log consumption over holds, weights = seconds of trusted SpO₂ in the hold, Student-t
+  interval over the between-hold spread. Hypoxia-symptom sessions contribute to consumption like any
+  other hold: consumption is a measurement of how fast O₂ went, not a reward.
+- Distance to the limit per hold, `d ∈ [0, 1]`: the larger of (a) the SpO₂ fall reached as a fraction
+  of the diver's own deepest fall (robust: 90th percentile of falls over holds with a trace) and
+  (b) the struggle share `(duration − firstContraction) / duration` against the diver's 90th
+  percentile of struggle shares; 0 when neither is measurable. `d` is descriptive and is never shown.
+- Capacity rows (replaces §10's row rule): every performed hold with a trace is a row with weight
+  `w_d = d²` (a one-minute easy hold adds almost nothing; a hold near the limit adds a lot), observed
+  value `y = ln(actualDuration)`, and censoring: a hold is a lower bound unless `d ≥ 0.8`, in which
+  case it is treated as an observation of the limit regardless of who ended it. The prior on the
+  level is the physiology prior at `VO2_d`. Everything else in §10 (Newton, σ², intervals, narrowing,
+  packing offset, context and axes admission by forward chain) is unchanged.
+- Gate: `pb.<v>` floors become holds with a trace (`holdsWithSpO2`, 5/4) and effective weight
+  `Σ w_d ≥ 2.0/1.5` (new unit `effectiveHolds`, Double), plus the narrowing test as before. The
+  sentence reads "N more holds with SpO₂ at <volume>". The diver-ended flag and `maxAttempt` are no
+  longer inputs; §10's `.maxAttempts` unit stays in the gate for the delay task's counts only.
+- Symptoms (#704): the model uses every hold, always. No symptom report excludes a hold, in §18 or
+  §10 v2 (v2's hypoxia skip is withdrawn). A reported symptom (hypoxia feeling today; blackout, LMC
+  or samba once #704 adds them) is kept as information on the hold it belongs to, the session's last
+  performed hold: a blackout marks that hold as past the limit, so it is an observation of the limit
+  with `d = 1`, and the symptom rides as a marker on the fingerprint. What the app does with a
+  blackout (hold a suggestion back, show a caution, refuse to file a best per nadir#873) is an
+  application rule on top of the model, never a change to what the model learns from. Reported in
+  the results file as counts.
+- Forward chain: the new row rule is admitted only if it beats §10 v2 on log score at each next
+  session's holds with `d ≥ 0.8`, with coverage 70 to 90 %. Both are printed. If it does not win,
+  the results file says so and §10 v2 stays the shipped rule.

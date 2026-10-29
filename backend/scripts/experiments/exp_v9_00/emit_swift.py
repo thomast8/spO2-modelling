@@ -46,11 +46,21 @@ def names(xs):
 
 
 def task(t):
+    """One `EvidenceFloors.Task`. §18's effectiveHolds is a Double floor, so it is written as
+    the extra `effectiveEnough` / `effectiveKeep` fields rather than inside the Int maps."""
     prim = "nil" if t["primary"] is None else f".{t['primary']}"
+    enough = {k: v for k, v in t["enough"].items() if k != "effectiveHolds"}
+    keep = {k: v for k, v in t["keep"].items() if k != "effectiveHolds"}
+    effective = ""
+    if "effectiveHolds" in t["enough"]:
+        effective = (
+            f",\n            effectiveEnough: {num(t['enough']['effectiveHolds'])}, "
+            f"effectiveKeep: {num(t['keep']['effectiveHolds'])}"
+        )
     return (
-        f".init(\n            enough: {kinds(t['enough'])}, keep: {kinds(t['keep'])},\n"
+        f".init(\n            enough: {kinds(enough)}, keep: {kinds(keep)},\n"
         f"            primary: {prim}, rhoEnough: {optional(t['rhoEnough'])}, rhoKeep: "
-        f"{optional(t['rhoKeep'])}\n        )"
+        f"{optional(t['rhoKeep'])}{effective}\n        )"
     )
 
 
@@ -241,11 +251,14 @@ def swift(r, export_name):
         f"        sigmaB0: {num(cfg['sigmaB0'])},",
         f"        placeholderRatios: [{ratios}],",
         f"        placeholderLogSD: {num(cfg['placeholderLogSD'])},",
-        f"        personalisePhysiology: {num(cfg['personalisePhysiology'])}",
+        f"        personalisePhysiology: {num(cfg['personalisePhysiology'])},",
+        f'        rowRule: "{cfg["rowRule"]}"',
         "    )",
         "",
     ]
-    f = r["calibration"]["floors"]
+    f = dict(r["calibration"]["floors"])
+    if cfg["rowRule"] == "v5":  # the shipped row rule's pb and level floors (§18)
+        f["pb"], f["level"] = f["pbV5"], f["levelV5"]
     lines.append("    static let evidence = EvidenceFloors(")
     order = ("delay", "holdVolume", "spirometry", "oxygenStore", "axis", "pb", "level", "readiness")
     lines += [f"        {k}: {task(f[k])}{',' if k != order[-1] else ''}" for k in order]

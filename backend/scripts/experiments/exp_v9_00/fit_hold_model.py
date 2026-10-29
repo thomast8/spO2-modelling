@@ -57,6 +57,7 @@ def base_config(half_life=None):
         "placeholderLogSD": PLACEHOLDER_LOG_SD,
         "placeholderRatios": PLACEHOLDER_RATIOS,
         "personalisePhysiology": False,
+        "rowRule": "v2",
     }
 
 
@@ -130,7 +131,8 @@ def fit(
     rows = model_rows(finished) if rows is None else rows
     t_now = max(started(s) for s in finished) if t_now is None else t_now
     h = cfg["halfLifeDays"]
-    w = [weight(t_now, started(r["session"]), h) for r in rows]
+    # A row may carry its own weight (§18: d²); recency multiplies it.
+    w = [weight(t_now, started(r["session"]), h) * r.get("weight", 1.0) for r in rows]
     xa = [inputs(r, finished, cfg, tz) for r in rows]
     xbar = centres([x for x, _ in xa], w)
     abar = centres([a for _, a in xa], w)
@@ -206,6 +208,7 @@ def fit(
         "cfg": cfg,
         "counts": {
             v: {
+                "rows": sum(1 for r in rows if r["mode"] == v),
                 "uncensored": sum(1 for r in rows if r["mode"] == v and not r["censored"]),
                 "censored": sum(1 for r in rows if r["mode"] == v and r["censored"]),
                 "effective": sum(wi for r, wi in zip(rows, w, strict=True) if r["mode"] == v),
@@ -262,25 +265,32 @@ def rows_to_reach(model, v, kind, rho):
     return None
 
 
-def estimates(model, sessions, previously_shown=frozenset(), floors=None, tz=HARNESS_TIME_ZONE):
-    """Per volume: level and pb estimates with their gates (`HoldModelEstimate`)."""
+def estimates(
+    model, sessions, previously_shown=frozenset(), floors=None, tz=HARNESS_TIME_ZONE, rule="v2"
+):
+    """Per volume: level and pb estimates with their gates (`HoldModelEstimate`). `rule` "v5"
+    gates on holds with a trace and their effective weight (§18) instead of max attempts."""
     floors = floors or DEFAULT_FLOORS
     a0, b0 = model["cfg"]["sigmaA0"], model["cfg"]["sigmaB0"]
     out = {}
-    full_unc = model["counts"]["full"]["uncensored"]
+    full = model["counts"]["full"]
+    full_have = full["uncensored"] if rule == "v2" else full["rows"]
+    full_unit = ("maxAttempts", "full") if rule == "v2" else ("holdsWithSpO2", "full")
     for v in MODES:
         c = model["counts"][v]
-        unit = ("maxAttempts", v)
         res = {"counts": c, "prior": model["priors"].get(v)}
         for kind in ("pb", "level"):
             key = f"{kind}.{v}"
             shown = key in previously_shown
-            tf = floors[kind]
-            counts = {unit: c["uncensored"]}
+            if rule == "v2":
+                tf, counts = floors[kind], {("maxAttempts", v): c["uncensored"]}
+            else:
+                tf = floors[f"{kind}V5"]
+                counts = {("holdsWithSpO2", v): c["rows"], ("effectiveHolds", v): c["effective"]}
             if v not in model["post"]:
                 gate = evaluate(key, tf, counts, None, shown)
                 if v not in model["priors"]:
-                    gate.missing.append((("maxAttempts", "full"), full_unc, full_unc + 1, "floor"))
+                    gate.missing.append((full_unit, full_have, full_have + 1, "floor"))
                 else:
                     gate.missing.append((("narrowing",), 0, 0, "narrowing"))
                 gate.enough = False
@@ -569,12 +579,6 @@ def v1_rows(session):
     return out
 
 
-def rows_ignoring_hypoxia(session):
-    s = dict(session)
-    s["feedback"] = None
-    return hold_model_rows(s)
-
-
 # ---------------------------------------------------------------- report
 
 
@@ -616,16 +620,11 @@ def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE, packing=None):
             f"    {v:<5} rows v1 {len(a):>2} ({a.count(False)} uncensored)   "
             f"v2 {len(b):>2} ({b.count(False)} uncensored)"
         )
-    excluded = [s for s in fin if "hypoxia" in symptoms(s)]
-    hyp = [r for s in excluded for r in rows_ignoring_hypoxia(s)]
-    costs = ", ".join(
-        f"{v} {sum(1 for r in hyp if r['mode'] == v)} rows "
-        f"({sum(1 for r in hyp if r['mode'] == v and not r['censored'])} uncensored)"
-        for v in MODES
-    )
+    marked = sum(1 for s in fin if "hypoxia" in symptoms(s))
     out.append(
-        "    sessions skipped because the diver reported hypoxia (the §10 rule): "
-        f"{len(excluded)}; rows lost: {costs}"
+        f"    sessions with a reported hypoxia feeling: {marked} (a marker on the session's last "
+        "hold; no\n    symptom excludes a hold, §18). No blackout, LMC or samba is recordable "
+        "yet."
     )
     oct4 = next((s for s in fin if s["startedAt"].startswith("2026-10-04")), None)
     if oct4:
@@ -792,27 +791,6 @@ def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE, packing=None):
                 f"(sd {math.sqrt(a[1]):.3f}), without {_fmt(math.exp(b[0]))} (sd "
                 f"{math.sqrt(b[1]):.3f})"
             )
-    # Diagnostic only: what the §10 hypoxia rule costs, with the skipped sessions put back.
-    skipped = sum(1 for s in fin if "hypoxia" in symptoms(s))
-    if skipped:
-        back = [dict(s, feedback=None) if "hypoxia" in symptoms(s) else s for s in fin]
-        with_them = fit(back, cfg, physiology, tz, packing=packing)
-        est_with = estimates(with_them, back)
-        out.append(
-            f"  Diagnostic, the {skipped} sessions skipped for a reported hypoxia put back (the "
-            "shipped model keeps\n  them out):"
-        )
-        for v in MODES:
-            e = est_with[v]
-            c = e["counts"]
-            parts = [f"{c['uncensored']} uncensored, {c['censored']} censored"]
-            for kind in ("level", "pb"):
-                if e[kind]["estimate"] is not None:
-                    lo, _, hi = e[kind]["estimate"]
-                    parts.append(f"{kind} {_fmt(lo)}-{_fmt(hi)}")
-            gate = e["pb"]["gate"]
-            parts.append("pb gate ENOUGH" if gate.enough else gate.summary)
-            out.append(f"    {v:<5} " + "; ".join(parts))
     out.append("")
     return {
         "model": model,

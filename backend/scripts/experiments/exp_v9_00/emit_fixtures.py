@@ -42,9 +42,9 @@ from static_volumes import static_volumes
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_OUT = HERE / "out" / "fixtures" / "learning"
-# Coverage asked by §14: a Masimo import, the 6 August RV table, a PM100 RV table whose rows the
-# §10 session rule excludes, a full-lung max with a short trace, 2 October, a session without
-# SpO₂ (an uncensored row), a censored hold (aborted), and the other uncensored row with SpO₂.
+# Coverage asked by §14: a Masimo import, the 6 August RV table, a PM100 RV table, a full-lung max
+# with a short trace, 2 October, a session without SpO₂ (an uncensored row), a censored hold
+# (aborted), and the other uncensored row with SpO₂.
 FIXTURE_DAYS = (
     "2026-08-06",
     "2026-08-08",
@@ -410,12 +410,12 @@ def emit(r, out_dir, export_name):
             "expected": expected,
         }
     ]
-    only_rv = [s for s in sessions if s["startedAt"].startswith("2026-10-16")]
+    only_rv = [s for s in sessions if s["startedAt"].startswith("2026-08-08")]  # unconfirmed import
     model = fit(only_rv, base_config())
     cases.append(
         {
-            "name": "no rows (every row excluded by the §10 session rule): every volume waits on "
-            "a full-lung attempt",
+            "name": "no rows (an unconfirmed STAmina import): every volume waits on a full-lung "
+            "attempt",
             "sessionIDs": [x["id"] for x in only_rv],
             "inputs": {
                 "holdModel": base_config(),

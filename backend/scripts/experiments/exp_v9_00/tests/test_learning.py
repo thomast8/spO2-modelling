@@ -245,7 +245,9 @@ def test_hold_model_rows_v2():
     ]
     s2 = session([st("hold", 312, style="full", plannedDuration=332, outcome={"type": "skipped"})])
     assert [r["censored"] for r in hold_model_rows(s2)] == [False]
-    assert hold_model_rows(dict(s2, feedback={"symptoms": ["hypoxia"]})) == []
+    # §18: a reported hypoxia feeling excludes nothing
+    hypoxic = dict(s2, feedback={"symptoms": ["hypoxia"]})
+    assert [(r["stepIndex"], r["censored"]) for r in hold_model_rows(hypoxic)] == [(0, False)]
     assert hold_model_rows(dict(s2, tags=["imported", "stamina"])) == []
 
 
@@ -608,3 +610,94 @@ def test_packed_holds_lose_the_offset_in_the_fit():
     )
     plain, packed = fit(sessions, base_config()), fit(sessions, base_config(), packing=pk)
     assert packed["post"]["full"][0] < plain["post"]["full"][0]
+
+
+# ---------------------------------------------------------------- §18 capacity from every hold
+
+
+def capacity_session(hold_spo2, actual=120, contractions=(), feedback=None):
+    """A breathe-up then one hold with a reading every second."""
+    s = session(
+        [
+            st("breathe", 30, [v(t, 98.0) for t in range(30)]),
+            st(
+                "hold",
+                actual,
+                [v(t, x) for t, x in enumerate(hold_spo2)],
+                style="full",
+                contractions=list(contractions),
+            ),
+            st("breathe", 60, [v(t, 97.0) for t in range(60)]),
+        ],
+        sid=f"cap-{random.random()}",
+    )
+    if feedback:
+        s["feedback"] = feedback
+    return s
+
+
+def test_vo2_prior_holds_without_holds_and_a_known_fall_gives_its_consumption():
+    from capacity import combine_vo2, hold_consumption
+
+    vo2, lo, hi, n = combine_vo2(231.0, [], [])
+    assert vo2 == 231.0 and n == 0 and lo < 231 < hi
+    # 1200 mL usable, half the usable desaturation (98 → 74 against an end of 50) in 300 s
+    assert hold_consumption(1200.0, 98.0, 74.0, 50.0, 300) == pytest.approx(120.0)
+    assert hold_consumption(1200.0, 98.0, 98.0, 50.0, 300) is None
+    vo2, lo, hi, _ = combine_vo2(231.0, [180.0] * 20, [100] * 20)
+    assert lo < vo2 < hi and vo2 < 231.0  # thin prior gives way to consistent evidence
+
+
+def test_distance_easy_deep_and_no_trace():
+    from capacity import Distance
+
+    dist = Distance([])
+    dist.fall90, dist.share90 = 20.0, 0.5
+    easy = capacity_session([98.0] * 60 + [97.0] * 60)
+    deep = capacity_session([98.0 - t * 0.25 for t in range(120)])
+    bare = capacity_session([])
+    assert dist.d(easy, 1) == pytest.approx(0.05)
+    assert dist.d(deep, 1) == 1.0
+    assert dist.d(bare, 1) == 0.0
+
+
+def test_capacity_rows_censor_below_the_limit():
+    from capacity import Distance, capacity_rows
+
+    dist = Distance([])
+    dist.fall90, dist.share90 = 20.0, 0.5
+    at = capacity_session([98.0] * 100, actual=100, contractions=[60])  # share 0.4 → d 0.8
+    below = capacity_session([98.0] * 100, actual=100, contractions=[61])  # d 0.78
+    (r_at,) = capacity_rows([at], dist)
+    (r_below,) = capacity_rows([below], dist)
+    assert not r_at["censored"] and r_at["weight"] == pytest.approx(0.64)
+    assert r_below["censored"]
+
+
+def test_no_symptom_excludes_a_hold_and_a_blackout_marks_the_limit():
+    from capacity import Distance, capacity_rows
+
+    dist = Distance([])
+    dist.fall90, dist.share90 = 20.0, 0.5
+    plain = capacity_session([98.0] * 120)
+    hypoxic = capacity_session([98.0] * 120, feedback={"symptoms": ["hypoxia"]})
+    blackout = capacity_session([98.0] * 120, feedback={"symptoms": ["blackout"]})
+    assert len(capacity_rows([plain], dist)) == len(capacity_rows([hypoxic], dist)) == 1
+    assert capacity_rows([hypoxic], dist)[0]["censored"]
+    (r,) = capacity_rows([blackout], dist)
+    assert r["d"] == 1.0 and not r["censored"]
+
+
+def test_v5_gate_sentence_per_volume_with_effective_weight():
+    from evidence import DEFAULT_FLOORS, evaluate
+
+    counts = {("holdsWithSpO2", "full"): 3, ("effectiveHolds", "full"): 0.6}
+    g = evaluate("pb.full", DEFAULT_FLOORS["pbV5"], counts, None, False)
+    # 2 more for the count floor, ceil(2.0 − 0.6) = 2 more for the effective weight
+    assert g.summary == "Not enough data yet: 2 more holds with SpO₂ at full lung."
+    counts[("effectiveHolds", "full")] = 0.4
+    g = evaluate("pb.full", DEFAULT_FLOORS["pbV5"], counts, None, False)
+    assert g.summary == "Not enough data yet: 2 more holds with SpO₂ at full lung."
+    counts = {("holdsWithSpO2", "rv"): 9, ("effectiveHolds", "rv"): 0.3}
+    g = evaluate("pb.rv", DEFAULT_FLOORS["pbV5"], counts, None, False)
+    assert g.summary == "Not enough data yet: 2 more holds with SpO₂ at RV."

@@ -12,6 +12,7 @@ KINDS = (
     "maxAttempts",
     "sessionsWithOximeter",
     "holdsWithSpO2",
+    "effectiveHolds",
     "holdsWithContractions",
     "confirmedHolds",
     "profileField",
@@ -48,6 +49,21 @@ DEFAULT_FLOORS = {
     "pb": _task({"maxAttempts": 5}, {"maxAttempts": 4}, "maxAttempts", 0.10, 0.05),
     "level": _task({"maxAttempts": 5}, {"maxAttempts": 4}, "maxAttempts", 0.10, 0.05),
     "readiness": _task({"readinessDays": 14}, {"readinessDays": 14}),
+    # §18 (v5): holds with a trace per volume and their effective weight Σ d² (a Double).
+    "pbV5": _task(
+        {"holdsWithSpO2": 5, "effectiveHolds": 2.0},
+        {"holdsWithSpO2": 4, "effectiveHolds": 1.5},
+        "holdsWithSpO2",
+        0.10,
+        0.05,
+    ),
+    "levelV5": _task(
+        {"holdsWithSpO2": 5, "effectiveHolds": 2.0},
+        {"holdsWithSpO2": 4, "effectiveHolds": 1.5},
+        "holdsWithSpO2",
+        0.10,
+        0.05,
+    ),
 }
 
 MODE_NAME = {"full": "full lung", "frc": "FRC", "rv": "RV"}
@@ -120,6 +136,19 @@ def evaluate(key, floors, counts, narrowing, previously_shown):
                 missing.append((primary, have, have + rows, "narrowing"))
             else:
                 missing.append((("narrowing",), 0, 0, "narrowing"))
+    # §18: an effective-weight shortfall is said in holds with SpO₂ at that volume; a new hold
+    # adds at most weight 1, so it needs ceil(floor − have) more of them.
+    missing = [
+        (
+            ("holdsWithSpO2", u[1]),
+            counts.get(("holdsWithSpO2", u[1]), 0),
+            counts.get(("holdsWithSpO2", u[1]), 0) + math.ceil(n - h - 1e-12),
+            r,
+        )
+        if u[0] == "effectiveHolds"
+        else (u, h, n, r)
+        for u, h, n, r in missing
+    ]
     # §16: every failing requirement shows at least 1 more (the narrowing unit has no number).
     missing = [(u, h, n if u[0] == "narrowing" else max(n, h + 1), r) for u, h, n, r in missing]
     return Gate(
@@ -171,7 +200,8 @@ def summary(missing):
         elif kind == "sessionsWithOximeter":
             phrases.append(_more(n, "session", "sessions") + " with this oximeter")
         elif kind == "holdsWithSpO2":
-            phrases.append(_more(n, "hold", "holds") + " with SpO₂")
+            where = f" at {MODE_NAME[unit[1]]}" if len(unit) > 1 else ""
+            phrases.append(_more(n, "hold", "holds") + " with SpO₂" + where)
         elif kind == "holdsWithContractions":
             phrases.append(_more(n, "hold", "holds") + " with contractions marked")
         elif kind == "confirmedHolds":

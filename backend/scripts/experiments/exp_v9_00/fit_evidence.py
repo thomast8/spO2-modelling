@@ -8,9 +8,11 @@ its coverage is reported and never moves a floor.
 """
 
 import copy
+import math
 
 from archive import HARNESS_TIME_ZONE, started
 from archive import finished as finished_sessions
+from capacity import Distance, capacity_rows
 from evidence import DEFAULT_FLOORS
 from features import hold_model_rows
 from fit_delay import KEYS, post_hold_delay, session_rows
@@ -20,15 +22,37 @@ from numerics import nig_predictive_interval
 GRID = (5, 6, 7, 8, 10, 12)
 
 
-def pb_decisions(sessions, cfg, floors, physiology=None, tz=HARNESS_TIME_ZONE, packing=None):
+def pb_decisions(
+    sessions,
+    cfg,
+    floors,
+    physiology=None,
+    tz=HARNESS_TIME_ZONE,
+    packing=None,
+    rule="v2",
+    ctx=None,
+):
+    """(day, volume, covered) for every enough pb decision in the chain. v2 scores the next
+    session's uncensored rows; v5 its holds at the limit (d ≥ 0.8 from the earlier sessions),
+    a packed hold against the interval moved by its packing offset."""
     fin = finished_sessions(sessions)
     shown, out = set(), []
     for s in fin:
         train = [t for t in fin if started(t) < started(s)]
-        if not model_rows(train):
-            continue
-        model = fit(train, cfg, physiology, tz, packing=packing)
-        est = estimates(model, train, frozenset(shown), floors, tz)
+        if rule == "v5":
+            dist = Distance(train)
+            rows = capacity_rows(train, dist)
+            if not rows:
+                continue
+            own = ctx.physiology(train)[1] if ctx else None
+            model = fit(train, cfg, own, tz, rows=rows, packing=packing)
+            tests = [r for r in capacity_rows([s], dist) if not r["censored"]]
+        else:
+            if not model_rows(train):
+                continue
+            model = fit(train, cfg, physiology, tz, packing=packing)
+            tests = [r for r in hold_model_rows(s) if not r["censored"]]
+        est = estimates(model, train, frozenset(shown), floors, tz, rule=rule)
         for v in MODES:
             key, res = f"pb.{v}", est[v]["pb"]
             if not res["gate"].enough:
@@ -36,17 +60,29 @@ def pb_decisions(sessions, cfg, floors, physiology=None, tz=HARNESS_TIME_ZONE, p
                 continue
             shown.add(key)
             lo, _, hi = res["estimate"]
-            for r in hold_model_rows(s):
-                if r["mode"] == v and not r["censored"]:
-                    out.append((s["startedAt"][:10], v, lo <= r["actual"] <= hi))
+            for r in tests:
+                if r["mode"] != v:
+                    continue
+                step = r["session"]["steps"][r["stepIndex"]]
+                off = packing.offset(step) if (packing and rule == "v5") else 0.0
+                out.append(
+                    (
+                        s["startedAt"][:10],
+                        v,
+                        lo * math.exp(off) <= r["actual"] <= hi * math.exp(off),
+                    )
+                )
     return out
 
 
-def with_pb_floor(floors, n):
+def with_pb_floor(floors, n, rule="v2"):
     f = copy.deepcopy(floors)
-    for task in ("pb", "level"):
-        f[task]["enough"]["maxAttempts"] = n
-        f[task]["keep"]["maxAttempts"] = n - 1
+    tasks, kind = (
+        (("pb", "level"), "maxAttempts") if rule == "v2" else (("pbV5", "levelV5"), "holdsWithSpO2")
+    )
+    for task in tasks:
+        f[task]["enough"][kind] = n
+        f[task]["keep"][kind] = n - 1
     return f
 
 
@@ -70,13 +106,19 @@ def delay_decisions(sessions, prior):
     return out
 
 
-def calibrate(sessions, cfg, delay_prior, physiology=None, out=None, packing=None):
+def calibrate(
+    sessions, cfg, delay_prior, physiology=None, out=None, packing=None, rule="v2", ctx=None
+):
     floors = copy.deepcopy(DEFAULT_FLOORS)
-    base = pb_decisions(sessions, cfg, floors, physiology, packing=packing)
+
+    def decisions(f):
+        return pb_decisions(sessions, cfg, f, physiology, packing=packing, rule=rule, ctx=ctx)
+
+    base = decisions(floors)
     tried = []
     if base:
         for n in GRID:
-            d = pb_decisions(sessions, cfg, with_pb_floor(floors, n), physiology, packing=packing)
+            d = decisions(with_pb_floor(floors, n, rule))
             cov = sum(x[2] for x in d) / len(d) if d else None
             tried.append((n, len(d), cov))
     cov0 = sum(x[2] for x in base) / len(base) if base else None
@@ -87,18 +129,30 @@ def calibrate(sessions, cfg, delay_prior, physiology=None, out=None, packing=Non
     else:
         ok = [n for n, k, c in tried if k and 0.7 <= c <= 0.9]
         calibrated = bool(ok)
-        chosen = with_pb_floor(floors, ok[0] if ok else GRID[-1])
-    pb = chosen["pb"]
+        chosen = with_pb_floor(floors, ok[0] if ok else GRID[-1], rule)
+    if rule == "v2":
+        pb = chosen["pb"]
+        pb_text = f"pb/level {pb['enough']['maxAttempts']}/{pb['keep']['maxAttempts']}"
+    else:
+        pb = chosen["pbV5"]
+        pb_text = (
+            f"pb/level (v5) holds with SpO₂ {pb['enough']['holdsWithSpO2']}/"
+            f"{pb['keep']['holdsWithSpO2']}, effective {pb['enough']['effectiveHolds']}/"
+            f"{pb['keep']['effectiveHolds']}"
+        )
     header = (
         f"calibrated: {'yes' if calibrated else 'no'}, coverage "
         f"{'n/a' if cov0 is None else f'{cov0:.0%}'} over {len(base)} decisions; floors "
-        f"pb/level {pb['enough']['maxAttempts']}/{pb['keep']['maxAttempts']}, delay "
+        f"{pb_text}, delay "
         f"{chosen['delay']['enough']['sessionsWithOximeter']}/"
         f"{chosen['delay']['keep']['sessionsWithOximeter']}, axis 5/4, holdVolume 10"
     )
     delay = delay_decisions(sessions, delay_prior)
     if out is not None:
-        out.append("  Calibration (pb, scored on the next session's uncensored max attempts):")
+        out.append(
+            "  Calibration (pb, scored on the next session's "
+            + ("uncensored max attempts):" if rule == "v2" else "holds at the limit, v5):")
+        )
         out.append(
             f"    {len(base)} enough-decisions with defaults"
             + (f", coverage {cov0:.0%}" if base else "")

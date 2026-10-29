@@ -178,16 +178,18 @@ def fit_constants(spiro, ratios, out=None):
     return c
 
 
-def physiology_prior(constants, profile, spiro, ratios):
+def physiology_prior(constants, profile, spiro, ratios, vo2_ml_min=None):
     """{v: (ln T_phys,v, σ_phys)} for the hold model, or None when the profile cannot give it.
 
-    Population constants only: nothing about how low the diver's own SpO₂ went enters it.
+    Population constants; `vo2_ml_min` replaces the population consumption with the diver's
+    fitted one (§18). Nothing about how low the diver's own SpO₂ went enters it.
     """
     vols = volumes_for(profile, spiro, ratios)
     if vols is None or profile.get("weightKg") is None:
         return None
     sigma = max(constants["sigmaMC"], constants["sigmaFloor"])
-    t = stores(constants, profile, {v: lv for v, (lv, _) in vols.items()})["T"]
+    st = stores(constants, profile, {v: lv for v, (lv, _) in vols.items()})
+    t = st["T"] if vo2_ml_min is None else {v: 60 * u / vo2_ml_min for v, u in st["usable"].items()}
     return {v: (math.log(t[v]), sigma) for v in t}
 
 

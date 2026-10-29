@@ -524,10 +524,26 @@ def in_series(step):
     return count is not None and count > 1 and step.get("maxAttempt") is not True
 
 
+# §18 (#704): the model uses every hold, always; no symptom excludes one. A reported blackout,
+# loss of motor control or samba marks the session's last performed hold as past the limit
+# (d = 1). SessionFeedback.Symptom has no such case yet, so these are placeholders for the raw
+# values #704 will add and nothing matches today. A "hypoxia" feeling is only a marker.
+PAST_LIMIT_SYMPTOMS = frozenset({"blackout", "lossOfMotorControl", "samba"})
+
+
+def past_limit_hold(session):
+    """Index of the hold a reported blackout/LMC/samba marks as past the limit (the session's
+    last performed hold), or None."""
+    if not PAST_LIMIT_SYMPTOMS & set(symptoms(session)):
+        return None
+    return max((i for i, st in enumerate(session["steps"]) if is_performed_hold(st)), default=None)
+
+
 def hold_model_rows(session):
     """§10 v2: each lung-mode slot's longest eligible hold (`BestDetection.candidateHolds`, first
-    of equals) plus every other eligible hold marked `maxAttempt == true`."""
-    if session.get("endedAt") is None or "hypoxia" in symptoms(session):
+    of equals) plus every other eligible hold marked `maxAttempt == true`. No symptom excludes a
+    hold (§18)."""
+    if session.get("endedAt") is None:
         return []
     steps = session["steps"]
     best = {}
