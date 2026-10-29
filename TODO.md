@@ -23,6 +23,9 @@
 
 _(newest first)_
 
+- [x] v8.01: what the two oximeters do to a hold, without ground truth (2026-10-17)
+  - Plateau-and-step inside holds is the same on Masimo and PM100; PM100 recovery onset ~10 s later within RV; sensor low-pass under 8 s
+  - Transit vs device delay not separable without a dual-oximeter session: `backend/scripts/experiments/exp_v8_01/`
 - [x] v8.00 baseline: v7.08 refitted per session on the Nadir recordings (2026-10-17)
   - Ten sessions, two oximeters: tau_0 6.6-39.1 s, k_co2 0.02-0.15 mmHg/s, gamma 1.16-2.51 across sessions
   - Freezing all four globals at February's values costs under 0.025 R2a on the app-recorded sessions with real desaturation; the shallow 8 August and 8 September sessions lose 0.059 and 0.018. The per-hold parameters do the work
