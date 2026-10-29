@@ -438,3 +438,26 @@ informative than a count of attempts. The limit is read from the trace, not from
   be at most 10 %; (3) sharpness: median predictive 80 % width. Forward chain by session date, the
   same sessions for both rules. A rule is preferred only if it is no worse on (2) and better on (1)
   at equal or lower (3); otherwise the result is reported as undecided.
+
+## 20. Day effect, warm-up, and per-hold blackout reports (v7, 29 October)
+
+- Day effect: each session gets its own form term `u_s ~ N(0, τ²)` on the log scale, added to every v5
+  row of that session, with `τ` given an inverse-gamma prior (judgement; printed) and fitted jointly
+  with the level. Context terms then only explain differences within a session. The PB estimate is
+  for an average day: `u = 0`, with `τ²` added to the predictive variance.
+- Context terms (replace `holdIndex`): `warmUp` (§9: any earlier performed hold in the session),
+  `logRestBefore`, `packs` (via the §17 offset, not a coefficient), and `breatheHyperventilation` /
+  `breathePacking` (§9), each ridge-shrunk towards 0 (prior sd 0.2) and kept only if the forward chain
+  (scored by the neutral scorer of §19) improves with it. The PB estimate is reported both with
+  warm-up and without, each at the diver's median rest for that case.
+- Blackout reports are per hold. A reported blackout, loss of motor control or samba attaches to the
+  hold the diver names (the check-in in #704 must ask which hold), not to the session's last hold.
+  That hold is an observation of the limit, `d = 1`, uncensored, at full weight. Until #704 records
+  it, the harness carries hand-entered reports in `SYMPTOM_OVERRIDES`, keyed by session start and step
+  index, each with the diver's own words and the date reported. First entry: 18 October 2026, the RV
+  ladder's fifth hold (3:07), "kind of blacked out, still able to stop the timer, not really
+  conscious", reported 29 October.
+- RV saturation: at RV the SpO₂ fall saturates (most ladder holds end in the 50s), so `d` from the fall
+  stops discriminating. For RV, `d` uses the larger of the struggle share and the fall only up to the
+  diver's 50th percentile fall, above which the fall adds nothing; the results file prints RV with
+  and without this.
