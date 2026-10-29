@@ -1,5 +1,6 @@
 {
  "group": "2026-02-21",
+ "globals_from": null,
  "n_holds": 4,
  "n_points": 1021,
  "excluded": {
@@ -41,9 +42,9 @@
    "paco2_0_at_bound": false,
    "r2a_stage_b": 0.9307782725225525,
    "r2n_stage_b": 0.29055964727090233,
+   "rmse_apnea_stage_b": 0.9868855348025823,
    "nadir_err_stage_b": 17.0,
-   "nadir_spo2_err_stage_b": -4.375561625282273,
-   "rmse_apnea_stage_b": 0.9868855348025823
+   "nadir_spo2_err_stage_b": -4.375561625282273
   },
   {
    "id": "2026-02-21-RV3",
@@ -63,9 +64,9 @@
    "paco2_0_at_bound": true,
    "r2a_stage_b": 0.9823820621652358,
    "r2n_stage_b": 0.7287939674038096,
+   "rmse_apnea_stage_b": 1.412211542645765,
    "nadir_err_stage_b": 0.0,
-   "nadir_spo2_err_stage_b": 3.4730368326356142,
-   "rmse_apnea_stage_b": 1.412211542645765
+   "nadir_spo2_err_stage_b": 3.4730368326356142
   },
   {
    "id": "2026-02-21-FRC5",
@@ -85,9 +86,9 @@
    "paco2_0_at_bound": false,
    "r2a_stage_b": 0.976051182628595,
    "r2n_stage_b": 0.9744323515970646,
+   "rmse_apnea_stage_b": 1.9811819750106756,
    "nadir_err_stage_b": 1.0,
-   "nadir_spo2_err_stage_b": -0.45625732169879285,
-   "rmse_apnea_stage_b": 1.9811819750106756
+   "nadir_spo2_err_stage_b": -0.45625732169879285
   },
   {
    "id": "2026-02-21-FL6",
@@ -107,9 +108,9 @@
    "paco2_0_at_bound": false,
    "r2a_stage_b": 0.9810473885594608,
    "r2n_stage_b": 0.9268965549420074,
+   "rmse_apnea_stage_b": 1.7594358444198155,
    "nadir_err_stage_b": 0.0,
-   "nadir_spo2_err_stage_b": -1.5308007561039858,
-   "rmse_apnea_stage_b": 1.7594358444198155
+   "nadir_spo2_err_stage_b": -1.5308007561039858
   }
  ]
 }
