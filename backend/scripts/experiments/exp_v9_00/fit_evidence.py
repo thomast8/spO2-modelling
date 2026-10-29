@@ -20,14 +20,15 @@ from numerics import nig_predictive_interval
 GRID = (5, 6, 7, 8, 10, 12)
 
 
-def pb_decisions(sessions, cfg, floors, physiology=None, tz=HARNESS_TIME_ZONE):
+def pb_decisions(sessions, cfg, floors, physiology=None, tz=HARNESS_TIME_ZONE, packing=None):
     fin = finished_sessions(sessions)
     shown, out = set(), []
     for s in fin:
         train = [t for t in fin if started(t) < started(s)]
         if not model_rows(train):
             continue
-        est = estimates(fit(train, cfg, physiology, tz), train, frozenset(shown), floors, tz)
+        model = fit(train, cfg, physiology, tz, packing=packing)
+        est = estimates(model, train, frozenset(shown), floors, tz)
         for v in MODES:
             key, res = f"pb.{v}", est[v]["pb"]
             if not res["gate"].enough:
@@ -69,13 +70,13 @@ def delay_decisions(sessions, prior):
     return out
 
 
-def calibrate(sessions, cfg, delay_prior, physiology=None, out=None):
+def calibrate(sessions, cfg, delay_prior, physiology=None, out=None, packing=None):
     floors = copy.deepcopy(DEFAULT_FLOORS)
-    base = pb_decisions(sessions, cfg, floors, physiology)
+    base = pb_decisions(sessions, cfg, floors, physiology, packing=packing)
     tried = []
     if base:
         for n in GRID:
-            d = pb_decisions(sessions, cfg, with_pb_floor(floors, n), physiology)
+            d = pb_decisions(sessions, cfg, with_pb_floor(floors, n), physiology, packing=packing)
             cov = sum(x[2] for x in d) / len(d) if d else None
             tried.append((n, len(d), cov))
     cov0 = sum(x[2] for x in base) / len(base) if base else None

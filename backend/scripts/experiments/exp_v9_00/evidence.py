@@ -58,7 +58,14 @@ FIELD_NAME = {
     "heightCm": "height",
     "weightKg": "weight",
 }
-VOLUME_NAME = {"tlc": "TLC", "frc": "FRC", "rv": "RV", "vc": "VC", "fvc": "FVC"}
+VOLUME_NAME = {
+    "tlc": "TLC",
+    "frc": "FRC",
+    "rv": "RV",
+    "vc": "VC",
+    "fvc": "FVC",
+    "packedVC": "packed vital capacity",
+}
 
 
 def unit_name(unit):

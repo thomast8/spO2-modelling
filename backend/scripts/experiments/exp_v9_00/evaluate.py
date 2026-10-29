@@ -3,7 +3,7 @@ results.
 
 Usage (from backend/):
     uv run python scripts/experiments/exp_v9_00/evaluate.py \
-        --export ~/Downloads/nadir-export-2026-10-17.json \
+        --export ~/Downloads/nadir-export-2026-10-29.json \
         --stamina "../Saturday, February 21, 2026.csv" --nhanes-cache <dir with *_E/F/G.xpt> \
         [--profile '{"sex": "male", "age": 35, "heightCm": 180, "weightKg": 75}']
 
@@ -24,6 +24,7 @@ from features import (
     diver_axes,
     eligible_for_model,
     hold_markers,
+    hold_model_rows,
     lung_mode_of,
     oximeter_key,
 )
@@ -35,10 +36,13 @@ from fit_hold_model import report as hold_model_report
 from fit_hold_volume import report as hold_volume_report
 from fit_lung_volume import fit_reference
 from fit_oxygen_store import fit_constants, physiology_prior
+from packing import NONE as PACKING_NONE
+from packing import Packing, packed_gate
+from packing import report as packing_report
 from static_volumes import compare_routes, ratios_literal, static_volumes
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_EXPORT = Path.home() / "Downloads" / "nadir-export-2026-10-17.json"
+DEFAULT_EXPORT = Path.home() / "Downloads" / "nadir-export-2026-10-29.json"
 DEFAULT_STAMINA = HERE.parents[3] / "Saturday, February 21, 2026.csv"
 # DiverProfile identifier → the key the harness profile uses (age stands in for dateOfBirth).
 PROFILE_FIELDS = (
@@ -168,13 +172,13 @@ def run(
         "v9.00 Results: the learning framework's priors, gates and forward chain on one diver",
         "=" * 84,
         "",
-        "Date: 2026-10-22",
+        "Date: 2026-10-29",
         "Script:  backend/scripts/experiments/exp_v9_00/evaluate.py (emit_swift.py, "
         "emit_fixtures.py)",
         f"Inputs:  Nadir full Export {Path(export).name} ({len(sessions) - len(stamina)} sessions "
         "after dedupe), the 21 February 2026\n         STAmina CSV rebuilt as StaminaImport would, "
         "NHANES 2007-2012 (SPX, DEMO, BMX, SMQ, MCQ).",
-        "Contract: learning-contract.md v1 with §10 v2 and §16 (22 October). Time zone for §9: "
+        "Contract: CONTRACT.md (v1 with §10 v2, §16 and §17 packing). Time zone for §9: "
         f"{HARNESS_TIME_ZONE}.",
         "Labels: the 6 August 2026 relabel (holds 1-8 RV, hold 9 full) is applied as "
         'styleSource "confirmed".',
@@ -210,20 +214,23 @@ def run(
             )
         )
         out.append("")
-    hm = hold_model_report(sessions, out, physiology=phys)
+    pk = Packing(profile, o2, spiro, ratios) if o2 is not None else PACKING_NONE
+    hm = hold_model_report(sessions, out, physiology=phys, packing=pk)
+    packing_report(sessions, out, pk, hm, phys, HARNESS_TIME_ZONE)
     ax, axis_gates = axes_section(sessions, t_now, hm["half_life"], out)
 
     out.append("6. EVIDENCE GATES (contract §13, §16) AND CALIBRATION")
     out.append("-" * 52)
     out.append("")
-    cal = calibrate(sessions, hm["config"], delay_prior, phys, out)
-    model = fit(sessions, hm["config"], phys)
+    cal = calibrate(sessions, hm["config"], delay_prior, phys, out, packing=pk)
+    model = fit(sessions, hm["config"], phys, packing=pk)
     est = estimates(model, sessions, floors=cal["floors"])
     gates = [delay[k]["gate"] for k in KEYS]
     gates += [hold_volume["gate"]]
     gates += [axis_gates[n] for n in AXES]
     for v in MODES:
         gates += [est[v]["pb"]["gate"], est[v]["level"]["gate"]]
+    gates.append(packed_gate(est["full"]["pb"]["gate"], pk))
     if spiro:
         gates += list(profile_gates(profile, spiro, ratios))
     out.append(f"  {'key':<24}{'state':<11}{'narrowing':>10}  counts / sentence")
@@ -240,29 +247,27 @@ def run(
     out.append("")
     out += OPEN_CHOICES
     full = est["full"]["level"]["estimate"]
-    eligible = [
-        st["actualDuration"]
-        for s in sessions
-        for st in s["steps"]
-        if eligible_for_model(s, st) and lung_mode_of(st) == "full"
-    ]
+    rows = [r for s in sessions for r in hold_model_rows(s) if r["mode"] == "full"]
     imported = [
         st["actualDuration"]
         for s in sessions
         for st in s["steps"]
         if is_performed_hold(st) and lung_mode_of(st) == "full" and not eligible_for_model(s, st)
     ]
-    if full and eligible:
+    if full and rows:
 
         def clock(t):
             return f"{int(t) // 60}:{round(t) % 60:02d}"
 
+        longest = max(r["actual"] for r in rows)
+        unc = [r["actual"] for r in rows if not r["censored"]]
         out.insert(
             len(out) - 1,
-            f"  - The full-lung level with censored rows ({clock(full[1])}) sits above every "
-            f"full-lung hold that can be a row\n    (longest {clock(max(eligible))}): the timed "
-            "finals end at the timer, so they are lower bounds. That is\n    exactly why the gate "
-            "waits on diver-ended attempts instead of showing it."
+            f"  - The full-lung level with censored rows ({clock(full[1])}) sits "
+            f"{'above' if full[1] > longest else 'below'} the longest full-slot row "
+            f"({clock(longest)}). {len(unc)} of the {len(rows)}\n    full-slot rows are "
+            "diver-ended; the rest end at a timer or a series and count only as lower bounds,\n"
+            "    which lift the level. That is why the gate waits on diver-ended attempts."
             + (
                 f" (The longest full-styled\n    hold anywhere is an unconfirmed STAmina import of "
                 f"{clock(max(imported))}, which the model does not read.)"

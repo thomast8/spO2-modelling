@@ -551,3 +551,60 @@ def test_no_axis_scores_how_low_spo2_went():
     assert AXES["desaturationRate"] == "desaturationRatePerMin"
     marks = hold_markers(session(drop_session([99 - t * 0.2 for t in range(31)])))
     assert marks[0]["spo2Low"] == 93 and abs(marks[0]["desaturationRatePerMin"] - 12) < 1e-4
+
+
+# ---------------------------------------------------------------- §17 packing
+
+
+def packing_profile(**measured):
+    return {"sex": "male", "age": 40, "heightCm": 180, "weightKg": 75, "measured": measured}
+
+
+def test_packing_efficiency_and_the_cap_at_measured_packs():
+    from packing import efficiency, extra_volume
+
+    e = efficiency(packing_profile(fvc=6.0, packedVC=7.2, packs=10))
+    assert e == pytest.approx(0.12)
+    assert efficiency(packing_profile(vc=6.4, fvc=6.0, packedVC=7.2, packs=10)) == pytest.approx(
+        0.08
+    )
+    assert extra_volume(e, 5, 10) == pytest.approx(0.6)
+    assert extra_volume(e, 25, 10) == pytest.approx(1.2)  # never beyond the measured gain
+    assert extra_volume(e, None, 10) == 0.0  # packCount not recorded: a lower bound
+    assert efficiency(packing_profile(fvc=6.0)) is None
+    assert extra_volume(None, 5, 10) == 0.0
+
+
+def test_packing_offset_is_zero_without_a_profile_or_measurement():
+    from fit_oxygen_store import point_constants
+    from packing import NONE, Packing
+    from static_volumes import ratios_literal
+
+    step = {"style": "packed", "packCount": 6}
+    assert NONE.offset(step) == 0.0 and not NONE.measured
+    c = dict(point_constants(), arterialFraction=0.6)
+    plain = Packing(packing_profile(vc=6.0, tlc=7.5), c, None, ratios_literal())
+    assert not plain.measured and plain.offset(step) == 0.0
+    pk = Packing(
+        packing_profile(vc=6.0, tlc=7.5, packedVC=7.2, packs=10), c, None, ratios_literal()
+    )
+    assert pk.offset({"style": "full", "packCount": 6}) == 0.0
+    assert pk.offset({"style": "packed"}) == 0.0
+    assert pk.offset(step) > 0
+    assert pk.offset({"style": "packed", "packCount": 40}) == pk.offset_for(10)  # no extrapolation
+
+
+def test_packed_holds_lose_the_offset_in_the_fit():
+    from fit_oxygen_store import point_constants
+    from packing import Packing
+    from static_volumes import ratios_literal
+
+    sessions = corpus()
+    for s in sessions:
+        s["steps"][10]["style"], s["steps"][10]["packCount"] = "packed", 6
+    c = dict(point_constants(), arterialFraction=0.6)
+    pk = Packing(
+        packing_profile(vc=6.0, tlc=7.5, packedVC=7.2, packs=10), c, None, ratios_literal()
+    )
+    plain, packed = fit(sessions, base_config()), fit(sessions, base_config(), packing=pk)
+    assert packed["post"]["full"][0] < plain["post"]["full"][0]

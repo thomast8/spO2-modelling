@@ -111,10 +111,20 @@ def quad(d, cov):
     return float(np.array(d) @ np.array(cov) @ np.array(d)) if d else 0.0
 
 
-def fit(sessions, cfg, physiology=None, tz=HARNESS_TIME_ZONE, rows=None, t_now=None, priors=None):
+def fit(
+    sessions,
+    cfg,
+    physiology=None,
+    tz=HARNESS_TIME_ZONE,
+    rows=None,
+    t_now=None,
+    priors=None,
+    packing=None,
+):
     """`Analytics.holdModel` before gating: per-volume posterior and the pooled σ².
 
-    `priors` overrides the priors on μ_v (diagnostics that must hold the prior fixed)."""
+    `priors` overrides the priors on μ_v (diagnostics that must hold the prior fixed);
+    `packing` (packing.Packing) removes what a packed hold's extra air should buy (§17)."""
     fixed_priors = priors
     finished = finished_sessions(sessions)
     rows = model_rows(finished) if rows is None else rows
@@ -125,7 +135,10 @@ def fit(sessions, cfg, physiology=None, tz=HARNESS_TIME_ZONE, rows=None, t_now=N
     xbar = centres([x for x, _ in xa], w)
     abar = centres([a for _, a in xa], w)
     yp = [
-        r["y"] - dot(cfg["beta"], deviation(x, xbar)) - dot(cfg["gamma"], deviation(a, abar))
+        r["y"]
+        - dot(cfg["beta"], deviation(x, xbar))
+        - dot(cfg["gamma"], deviation(a, abar))
+        - (packing.offset(r["session"]["steps"][r["stepIndex"]]) if packing else 0.0)
         for r, (x, a) in zip(rows, xa, strict=True)
     ]
     a0, b0 = cfg["sigmaA0"], cfg["sigmaB0"]
@@ -366,7 +379,15 @@ def score(loc, scale, df, row):
     return float(stats.t.logpdf(z, df) - math.log(scale))
 
 
-def chain(sessions, cfg, physiology=None, tz=HARNESS_TIME_ZONE, burn_in=BURN_IN, beta_fn=None):
+def chain(
+    sessions,
+    cfg,
+    physiology=None,
+    tz=HARNESS_TIME_ZONE,
+    burn_in=BURN_IN,
+    beta_fn=None,
+    packing=None,
+):
     """Forward chain by session date. Each session with rows, after the first `burn_in` of them, is
     predicted from every finished session before it. `beta_fn(train_model_inputs)` re-estimates
     coefficients per step for a candidate input. Returns scored predictions."""
@@ -378,7 +399,7 @@ def chain(sessions, cfg, physiology=None, tz=HARNESS_TIME_ZONE, burn_in=BURN_IN,
         c = dict(cfg)
         if beta_fn:
             c = beta_fn(train, c)
-        model = fit(train, c, physiology, tz)
+        model = fit(train, c, physiology, tz, packing=packing)
         for row in hold_model_rows(s):
             x, a = inputs(row, train + [s], c, tz)
             p = predictive(model, row["mode"], x, a)
@@ -561,7 +582,7 @@ def _fmt(t):
     return f"{int(t) // 60}:{int(round(t)) % 60:02d}"
 
 
-def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE):
+def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE, packing=None):
     fin = finished_sessions(sessions)
     rows = model_rows(fin)
     out.append("4. HOLD MODEL: WHERE THE PB MIGHT LAND (contract §10 v2)")
@@ -628,7 +649,7 @@ def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE):
 
     # half-life choice on the base model
     out.append("  Forward chain (sessions with rows by date, first 5 as burn-in):")
-    chains = {h: chain(fin, base_config(h), physiology, tz) for h in HALF_LIVES}
+    chains = {h: chain(fin, base_config(h), physiology, tz, packing=packing) for h in HALF_LIVES}
     sums = {h: summarise(p, f"base h={h or 'none'}") for h, p in chains.items()}
 
     # A half-life is an input like any other: it must beat no weighting on log score with
@@ -689,7 +710,9 @@ def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE):
     )
     for kind, names in (("covariate", CONTEXT_FIELDS), ("axis", tuple(AXES))):
         for name in names:
-            preds = chain(fin, cfg, physiology, tz, beta_fn=single_input_beta(name, kind))
+            preds = chain(
+                fin, cfg, physiology, tz, beta_fn=single_input_beta(name, kind), packing=packing
+            )
             sm = summarise(preds, name)
             gain = sm["logscore"] - base_sum["logscore"]
             ok = admits(sm, base_sum)
@@ -705,9 +728,8 @@ def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE):
                 need = "no effect seen"
             else:
                 n_need = all_rows_unc * (Z90 * math.sqrt(var) / abs(b)) ** 2
-                need = (
-                    f"about {max(0, math.ceil(n_need - all_rows_unc))} more max attempts to decide"
-                )
+                more = max(0, math.ceil(n_need - all_rows_unc))
+                need = f"about {more} more max attempt{'' if more == 1 else 's'} to decide"
             decide.append((name, need))
             out.append(
                 f"    {name:<26}{'admitted' if ok else 'not admitted':<14}gain {gain:+.2f}   {need}"
@@ -724,7 +746,7 @@ def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE):
     # the shipped model on all data
     cfg["covariates"], cfg["axes"] = admitted_cov, admitted_ax
     cfg = with_coefficients(fin, cfg)
-    model = fit(fin, cfg, physiology, tz)
+    model = fit(fin, cfg, physiology, tz, packing=packing)
     est = estimates(model, fin)
     out.append(
         f"  Model on all data (half-life {best_h or 'none'}, σ = {math.sqrt(model['sigma2']):.3f} "
@@ -759,6 +781,7 @@ def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE):
         tz,
         rows=[r for r in rows if not r["censored"]],
         priors=model["priors"],
+        packing=packing,
     )
     for v in MODES:
         if v in model["post"] and v in no_cens["post"]:
@@ -769,6 +792,27 @@ def report(sessions, out, physiology=None, tz=HARNESS_TIME_ZONE):
                 f"(sd {math.sqrt(a[1]):.3f}), without {_fmt(math.exp(b[0]))} (sd "
                 f"{math.sqrt(b[1]):.3f})"
             )
+    # Diagnostic only: what the §10 hypoxia rule costs, with the skipped sessions put back.
+    skipped = sum(1 for s in fin if "hypoxia" in symptoms(s))
+    if skipped:
+        back = [dict(s, feedback=None) if "hypoxia" in symptoms(s) else s for s in fin]
+        with_them = fit(back, cfg, physiology, tz, packing=packing)
+        est_with = estimates(with_them, back)
+        out.append(
+            f"  Diagnostic, the {skipped} sessions skipped for a reported hypoxia put back (the "
+            "shipped model keeps\n  them out):"
+        )
+        for v in MODES:
+            e = est_with[v]
+            c = e["counts"]
+            parts = [f"{c['uncensored']} uncensored, {c['censored']} censored"]
+            for kind in ("level", "pb"):
+                if e[kind]["estimate"] is not None:
+                    lo, _, hi = e[kind]["estimate"]
+                    parts.append(f"{kind} {_fmt(lo)}-{_fmt(hi)}")
+            gate = e["pb"]["gate"]
+            parts.append("pb gate ENOUGH" if gate.enough else gate.summary)
+            out.append(f"    {v:<5} " + "; ".join(parts))
     out.append("")
     return {
         "model": model,

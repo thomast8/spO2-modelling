@@ -37,6 +37,7 @@ from fit_hold_model import MODES, base_config, estimates, fit
 from fit_hold_volume import predict, verdict
 from fit_lung_volume import predict as spiro_predict
 from fit_oxygen_store import REFERENCE, headroom, physiology_prior, stores, volumes_for
+from packing import Packing, packed_gate
 from static_volumes import static_volumes
 
 HERE = Path(__file__).resolve().parent
@@ -430,29 +431,63 @@ def emit(r, out_dir, export_name):
     if o2 is not None:
         # The Nadir-side hand-built sessions under the population physiology prior; one of
         # them has a censored FRC row far below its prior (the log1p branch of logSurvival).
+        # The second variant adds a synthetic packed measurement (§17): its packed hold with
+        # packCount 6 then loses ln(U(V + ΔV) / U(V)) before it informs the full-lung level.
         hb, _, tz = hand
         t_end = max(started(x) for x in hb if x.get("endedAt") is not None)
         profile = dict(REFERENCE, dateOfBirth=f"{t_end.year - REFERENCE['age']}-{t_end:%m-%d}")
+        packed_profile = dict(
+            profile, measured={**REFERENCE["measured"], "vc": 5.6, "packedVC": 6.8, "packs": 10}
+        )
         phys = physiology_prior(o2, profile, spiro, ratios)
-        model = fit(hb, cfg, phys, tz)
+        variants, expected = [], []
+        for name, prof in (
+            ("population physiology prior", profile),
+            ("population physiology prior, packed measurement", packed_profile),
+        ):
+            pk = Packing(prof, o2, spiro, ratios)
+            model = fit(hb, cfg, phys, tz, packing=pk)
+            variants.append(
+                {
+                    "name": name,
+                    "profile": prof,
+                    "previouslyShown": [],
+                    "physiology": {v: {"mean": q[0], "sd": q[1]} for v, q in phys.items()},
+                    "packing": {
+                        "efficiency": pk.e,
+                        "holds": [
+                            {
+                                "sessionID": x["id"],
+                                "stepIndex": i,
+                                "packCount": st.get("packCount"),
+                                "deltaV": pk.delta_v(st.get("packCount")),
+                                "offset": pk.offset(st),
+                            }
+                            for x in hb
+                            for i, st in enumerate(x["steps"])
+                            if is_performed_hold(st) and st.get("style") == "packed"
+                        ],
+                    },
+                }
+            )
+            est = estimates(model, hb, floors=floors, tz=tz)
+            expected.append(
+                {
+                    **model_json(model, est),
+                    "packedGate": gate_json(packed_gate(est["full"]["pb"]["gate"], pk)),
+                }
+            )
         cases.append(
             {
                 "name": "hand-built, reference profile, population physiology prior",
                 "sessions": hb,
                 "inputs": {
                     "holdModel": cfg,
-                    "profile": profile,
                     "floors": model_floors,
                     "timeZone": tz,
-                    "variants": [
-                        {
-                            "name": "population physiology prior",
-                            "previouslyShown": [],
-                            "physiology": {v: {"mean": q[0], "sd": q[1]} for v, q in phys.items()},
-                        }
-                    ],
+                    "variants": variants,
                 },
-                "expected": [model_json(model, estimates(model, hb, floors=floors, tz=tz))],
+                "expected": expected,
             }
         )
     written.append(write(out_dir, "hold-model.json", gen, cases))

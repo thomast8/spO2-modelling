@@ -352,3 +352,26 @@ session without SpO₂, a censored hold.
 - Oxygen store: `restingVO2PerKg` is emitted as the Monte Carlo median of the sampled consumption
   (status derived), so `ln T_phys` is centred on the same distribution `σ_phys` describes.
 - Fixtures record the floors they were built with and use the emitted `Priors.evidence` floors.
+
+## 17. Packing (v4, 29 October)
+
+Lung packing adds air above a full inhale. It is measured, never assumed.
+- Measurement: `LungMeasurement.Kind.packedVC` with `packs: Int`, the vital capacity blown after that
+  many packs. Packing efficiency `e = (packedVC − baseVC) / packs` litres per pack, where `baseVC` is the
+  measured VC, else measured FVC, taken nearest in time to the packed measurement. No packed measurement
+  means no efficiency: packing adds nothing anywhere, and packed estimates wait with
+  `lungVolume.packedVC` ("needs a packed vital capacity"). There is no population default.
+- Extra volume of a packed hold: `ΔV = e · min(packCount, packs)`, capped at the measured packed gain, so
+  it never extrapolates beyond what was measured. A packed hold with no recorded `packCount` gets
+  `ΔV = 0` (a lower bound on its volume). Recorded `packCount` is the only per-hold input.
+- Oxygen store at a packed volume: the lung term uses `TLC + ΔV` (or the measured TLC plus ΔV); `fAO2Start`
+  and `fAO2End` stay as for full lung (the literature's higher packed FETO2, 0.16, is not used, which
+  understates the gain). Blood and muscle terms are unchanged.
+- Hold model: packed holds stay in the full-lung slot (as #840 files their bests), with a fixed physiology
+  offset instead of a new parameter: `y' = y − ln(U(V_full + ΔV) / U(V_full))`, where `U` is the usable store
+  at the diver's profile. The offset is 0 without a profile or without an efficiency. So a packed hold
+  tells the model about full-lung capacity after removing what the extra air should buy.
+- Packed PB estimate: shown only next to a ready full-lung estimate, at the diver's most-used pack count
+  among uncensored packed rows (else the measured `packs`), as `μ_full + ln(U(V_full + ΔV)/U(V_full))` with
+  the full-lung interval; its gate is the full-lung gate plus the packed measurement.
+- Packing efficiency itself is a measurement, always shown with its date, never scored and never a target.
