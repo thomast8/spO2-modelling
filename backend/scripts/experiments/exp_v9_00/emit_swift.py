@@ -279,6 +279,7 @@ if __name__ == "__main__":
         a.nhanes_cache,
         json.loads(a.profile) if a.profile else None,
         write=False,
+        row_rule=a.row_rule,
     )
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -740,6 +740,7 @@ if __name__ == "__main__":
         a.nhanes_cache,
         json.loads(a.profile) if a.profile else None,
         write=False,
+        row_rule=a.row_rule,
     )
     for path in emit(r, Path(a.out_dir), Path(a.export).name):
         print(f"wrote {path} ({path.stat().st_size // 1024} KB)")

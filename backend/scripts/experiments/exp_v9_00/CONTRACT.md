@@ -416,3 +416,25 @@ informative than a count of attempts. The limit is read from the trace, not from
 - Forward chain: the new row rule is admitted only if it beats §10 v2 on log score at each next
   session's holds with `d ≥ 0.8`, with coverage 70 to 90 %. Both are printed. If it does not win,
   the results file says so and §10 v2 stays the shipped rule.
+
+## 19. Lag-adjusted fall, rest before, and neutral scoring (v6, 29 October)
+
+- Lag-adjusted fall (a stopgap until the sensor-lag project lands): the finger shows the hold's low
+  25 to 40 s late, so the end-of-hold reading understates the fall. For VO2_d and for d, the hold's
+  end saturation is the post-hold minimum from the recovery trace (§3: the lowest trusted reading
+  between the hold and the next hold, `spo2Low`), used only when the trace turned (an onset exists)
+  or ran 60 s or more; otherwise the hold keeps `spo2End` and is flagged as lag-uncorrected. The
+  results file prints VO2_d and the v5 fit with and without the adjustment.
+- Rest before: v5 rows always carry `logRestBefore` and `holdIndex` (§9) as covariates, with
+  coefficients fitted jointly on the limit rows (ridge, prior sd 0.2 per input) and their covariance
+  added to the predictive variance, so a 2:30 limit after 2 minutes' rest in a CO₂ table is read as a
+  fatigued limit and does not drag the rested level down. The level and PB are reported at the
+  diver's rested context (median of the three longest limit rows, as §10's x_PB).
+- Neutral scoring: neither rule may choose its own exam. Rules are compared by a separate scorer on
+  targets fixed before any score is seen and computed without either rule's d or the stop button:
+  (1) lower-bound log score: every held-out hold is a lower bound on capacity, scored
+  `log S(ln actual)` under each rule's predictive; (2) upper-bound calibration: the share of
+  held-out session-best holds per volume above each rule's 90 % predictive upper bound, which should
+  be at most 10 %; (3) sharpness: median predictive 80 % width. Forward chain by session date, the
+  same sessions for both rules. A rule is preferred only if it is no worse on (2) and better on (1)
+  at equal or lower (3); otherwise the result is reported as undecided.

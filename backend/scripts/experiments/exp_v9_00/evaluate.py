@@ -18,8 +18,8 @@ from pathlib import Path
 
 from archive import HARNESS_TIME_ZONE, load_all, started
 from capacity import Context as CapacityContext
-from capacity import Distance, capacity_rows
 from capacity import report as capacity_report
+from capacity import v5_fit
 from evidence import DEFAULT_FLOORS, evaluate
 from features import (
     AXES,
@@ -68,6 +68,9 @@ OPEN_CHOICES = [
     "  - Half-life: admitted like any input (must beat none on log score with coverage 70-90 %).",
     "  - Coefficients for a candidate input: ridge on uncensored rows within volumes, prior sd "
     "0.2 per input\n    sd; censored rows do not inform coefficients.",
+    "  - §19 rest term: the same ridge on v5's limit rows (holdIndex and logRestBefore jointly), "
+    "weighted by\n    recency × d² as the fit weighs them, y net of the §17 packing offset; "
+    '"prior sd 0.2 per input" read as\n    per input sd, as above.',
     "  - level rowsToReach (the contract gives pb's only): smallest m with "
     "t90(2an+m)·sqrt(1/(1/s0² + (n+m)/σ²))\n    ≤ (1 − ρ)·1.2816·s0.",
     "  - A volume with no prior waits with 1 more max attempt at full lung (any outcome sets "
@@ -165,8 +168,14 @@ def axes_section(sessions, t_now, h, out):
 
 
 def run(
-    export=DEFAULT_EXPORT, stamina=(DEFAULT_STAMINA,), nhanes_cache=None, profile=None, write=True
+    export=DEFAULT_EXPORT,
+    stamina=(DEFAULT_STAMINA,),
+    nhanes_cache=None,
+    profile=None,
+    write=True,
+    row_rule="v2",
 ):
+    """`row_rule` is the shipped rule: v2 until §19's neutral scorer prefers v5."""
     sessions = load_all(export, [p for p in stamina if p])
     t_now = max(started(s) for s in sessions)
     out = [
@@ -179,7 +188,8 @@ def run(
         f"Inputs:  Nadir full Export {Path(export).name} ({len(sessions) - len(stamina)} sessions "
         "after dedupe), the 21 February 2026\n         STAmina CSV rebuilt as StaminaImport would, "
         "NHANES 2007-2012 (SPX, DEMO, BMX, SMQ, MCQ).",
-        "Contract: CONTRACT.md (v1 with §10 v2, §16, §17 packing, §18 capacity). Time zone for §9: "
+        "Contract: CONTRACT.md (v1 with §10 v2, §16, §17 packing, §18 capacity, §19 fall and "
+        "rest).\nTime zone for §9: "
         f"{HARNESS_TIME_ZONE}.",
         "Labels: the 6 August 2026 relabel (holds 1-8 RV, hold 9 full) is applied as "
         'styleSource "confirmed".',
@@ -220,7 +230,7 @@ def run(
     packing_report(sessions, out, pk, hm, phys, HARNESS_TIME_ZONE)
     ctx = CapacityContext(o2, profile, spiro, ratios, pk)
     cap = capacity_report(sessions, out, hm["config"], ctx, HARNESS_TIME_ZONE)
-    rule = "v5" if cap["compare"]["admitted"] else "v2"
+    rule = row_rule
     hm["config"]["rowRule"] = rule
     ax, axis_gates = axes_section(sessions, t_now, hm["half_life"], out)
 
@@ -229,14 +239,16 @@ def run(
     out.append("")
     cal = calibrate(sessions, hm["config"], delay_prior, phys, out, packing=pk, rule=rule, ctx=ctx)
     if rule == "v5":
-        dist = Distance(sessions)
-        _, own = ctx.physiology(sessions)
-        rows = capacity_rows(sessions, dist)
-        model = fit(sessions, hm["config"], own, rows=rows, packing=pk)
+        model = v5_fit(sessions, hm["config"], ctx)[0]
+        hm["config"] = model["cfg"]  # the literal carries v5's rest-before inputs
     else:
         model = fit(sessions, hm["config"], phys, packing=pk)
     est = estimates(model, sessions, floors=cal["floors"], rule=rule)
-    out.append(f"  Shipped row rule: {rule} (§18 chain above); the gates below are its gates.")
+    out.append(
+        f"  Shipped row rule: {rule}"
+        + (" (set by --row-rule)." if rule != "v2" else " until §19's neutral scorer prefers v5.")
+        + " The gates below are its gates."
+    )
     gates = [delay[k]["gate"] for k in KEYS]
     gates += [hold_volume["gate"]]
     gates += [axis_gates[n] for n in AXES]
@@ -279,18 +291,16 @@ def run(
     if v5_full and limit:
         short = sum(1 for r in limit if r["actual"] < 180)
         notes.append(
-            f"  - §18 v5: the full-lung level ({clock(v5_full[1])}) rests on {len(limit)} holds "
-            f"at the limit (d ≥ 0.8); {short} of them are\n    under 3:00, table holds whose "
-            "struggle share or fall reached the diver's 90th percentile. No rest-before\n    "
-            "covariate is admitted to tell a table limit from a rested one, so they pull the level "
-            "down."
+            f"  - §19 v5: the full-lung level ({clock(v5_full[1])}, at the rested context) rests "
+            f"on {len(limit)} holds at the limit\n    (d ≥ 0.8); {short} of them are under 3:00, "
+            "table holds the rest-before term reads as fatigued limits."
         )
     notes += [
-        "  - §18 d: the fall is spo2Baseline − spo2Low (the post-hold trough), both 90th "
-        "percentiles pooled\n    across lung volumes; VO2_d reads only holds of known volume and "
-        "skips holds with no fall.",
-        "  - §18 chain: both rules are scored on the holds v5's own d calls the limit, so the test "
-        "set is v5's\n    choice, not a neutral one.",
+        "  - §19 d: the fall runs from spo2Baseline to the post-hold minimum when the recovery "
+        "trace turned or\n    ran 60 s, else to spo2End; both 90th percentiles are per lung "
+        "volume. VO2_d reads only holds of\n    known volume and skips holds with no fall.",
+        "  - §19 rule choice: not made here. The neutral scorer compares v2 and v5 through "
+        "capacity.predictive on\n    targets neither rule's d picks; v2 ships until it prefers v5.",
     ]
     out[len(out) - 1 : len(out) - 1] = notes
     text = "\n".join(out) + "\n"
@@ -320,6 +330,12 @@ def cli():
     p.add_argument("--stamina", nargs="*", default=[str(DEFAULT_STAMINA)])
     p.add_argument("--nhanes-cache")
     p.add_argument(
+        "--row-rule",
+        choices=("v2", "v5"),
+        default="v2",
+        help="shipped row rule; v5 only once §19's neutral scorer prefers it",
+    )
+    p.add_argument(
         "--profile",
         help="JSON: sex, age, heightCm, weightKg, optional measured {vc, fvc, tlc, frc, rv}",
     )
@@ -328,5 +344,11 @@ def cli():
 
 if __name__ == "__main__":
     a = cli().parse_args()
-    r = run(a.export, a.stamina, a.nhanes_cache, json.loads(a.profile) if a.profile else None)
+    r = run(
+        a.export,
+        a.stamina,
+        a.nhanes_cache,
+        json.loads(a.profile) if a.profile else None,
+        row_rule=a.row_rule,
+    )
     print(r["text"])

@@ -12,7 +12,7 @@ import math
 
 from archive import HARNESS_TIME_ZONE, started
 from archive import finished as finished_sessions
-from capacity import Distance, capacity_rows
+from capacity import NO_DIVER, capacity_rows, v5_fit
 from evidence import DEFAULT_FLOORS
 from features import hold_model_rows
 from fit_delay import KEYS, post_hold_delay, session_rows
@@ -40,12 +40,9 @@ def pb_decisions(
     for s in fin:
         train = [t for t in fin if started(t) < started(s)]
         if rule == "v5":
-            dist = Distance(train)
-            rows = capacity_rows(train, dist)
+            model, rows, dist, _ = v5_fit(train, cfg, ctx or NO_DIVER, tz)
             if not rows:
                 continue
-            own = ctx.physiology(train)[1] if ctx else None
-            model = fit(train, cfg, own, tz, rows=rows, packing=packing)
             tests = [r for r in capacity_rows([s], dist) if not r["censored"]]
         else:
             if not model_rows(train):

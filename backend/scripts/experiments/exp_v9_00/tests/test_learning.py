@@ -615,8 +615,10 @@ def test_packed_holds_lose_the_offset_in_the_fit():
 # ---------------------------------------------------------------- §18 capacity from every hold
 
 
-def capacity_session(hold_spo2, actual=120, contractions=(), feedback=None):
-    """A breathe-up then one hold with a reading every second."""
+def capacity_session(
+    hold_spo2, actual=120, contractions=(), feedback=None, after=(97.0,) * 60, style="full"
+):
+    """A breathe-up then one hold with a reading every second, then `after` (one a second)."""
     s = session(
         [
             st("breathe", 30, [v(t, 98.0) for t in range(30)]),
@@ -624,10 +626,10 @@ def capacity_session(hold_spo2, actual=120, contractions=(), feedback=None):
                 "hold",
                 actual,
                 [v(t, x) for t, x in enumerate(hold_spo2)],
-                style="full",
+                style=style,
                 contractions=list(contractions),
             ),
-            st("breathe", 60, [v(t, 97.0) for t in range(60)]),
+            st("breathe", len(after), [v(t, x) for t, x in enumerate(after)]),
         ],
         sid=f"cap-{random.random()}",
     )
@@ -652,7 +654,7 @@ def test_distance_easy_deep_and_no_trace():
     from capacity import Distance
 
     dist = Distance([])
-    dist.fall90, dist.share90 = 20.0, 0.5
+    dist.scales["full"] = (20.0, 0.5)
     easy = capacity_session([98.0] * 60 + [97.0] * 60)
     deep = capacity_session([98.0 - t * 0.25 for t in range(120)])
     bare = capacity_session([])
@@ -665,7 +667,7 @@ def test_capacity_rows_censor_below_the_limit():
     from capacity import Distance, capacity_rows
 
     dist = Distance([])
-    dist.fall90, dist.share90 = 20.0, 0.5
+    dist.scales["full"] = (20.0, 0.5)
     at = capacity_session([98.0] * 100, actual=100, contractions=[60])  # share 0.4 → d 0.8
     below = capacity_session([98.0] * 100, actual=100, contractions=[61])  # d 0.78
     (r_at,) = capacity_rows([at], dist)
@@ -678,7 +680,7 @@ def test_no_symptom_excludes_a_hold_and_a_blackout_marks_the_limit():
     from capacity import Distance, capacity_rows
 
     dist = Distance([])
-    dist.fall90, dist.share90 = 20.0, 0.5
+    dist.scales["full"] = (20.0, 0.5)
     plain = capacity_session([98.0] * 120)
     hypoxic = capacity_session([98.0] * 120, feedback={"symptoms": ["hypoxia"]})
     blackout = capacity_session([98.0] * 120, feedback={"symptoms": ["blackout"]})
@@ -701,3 +703,111 @@ def test_v5_gate_sentence_per_volume_with_effective_weight():
     counts = {("holdsWithSpO2", "rv"): 9, ("effectiveHolds", "rv"): 0.3}
     g = evaluate("pb.rv", DEFAULT_FLOORS["pbV5"], counts, None, False)
     assert g.summary == "Not enough data yet: 2 more holds with SpO₂ at RV."
+
+
+# ---------------------------------------------------------------- §19 fall and rest before
+
+
+def test_lag_adjusted_end_only_when_the_recovery_trace_turned_or_ran_60_s():
+    from capacity import Distance, end_saturation
+
+    hold = [98.0] * 100 + [90.0] * 20  # spo2End 90
+    turned = capacity_session(hold, after=[85.0, 80.0, 82.0, 85.0, 90.0, 95.0])
+    flat_short = capacity_session(hold, after=[90.0] * 30)
+    flat_long = capacity_session(hold, after=[88.0] * 61)  # trace runs to 60 s, never turns
+    assert end_saturation(turned, 1) == (80.0, True)
+    assert end_saturation(turned, 1, lag=False) == (90.0, False)
+    assert end_saturation(flat_short, 1) == (90.0, False)
+    assert end_saturation(flat_long, 1) == (88.0, True)
+    lagged, plain = Distance([]), Distance([], lag=False)
+    lagged.scales["full"] = plain.scales["full"] = (20.0, None)
+    assert lagged.d(turned, 1) == pytest.approx(0.9)  # 98 → 80 of a 20-point scale
+    assert plain.d(turned, 1) == pytest.approx(0.4)  # 98 → 90
+
+
+def test_percentiles_are_per_volume_and_pooled_below_five_traced_holds():
+    from capacity import Distance
+
+    full = [capacity_session([98.0] * 60 + [88.0] * 60) for _ in range(5)]  # falls of 10
+    rv = capacity_session([98.0] * 60 + [58.0] * 60, style="rv")  # a fall of 40
+    for k, s in enumerate([*full, rv]):
+        s["startedAt"] = s["endedAt"] = f"2026-09-{10 + k}T18:00:00Z"
+    dist = Distance([*full, rv])
+    assert dist.pooled_for == ["frc", "rv"]
+    assert dist.scales["full"][0] == pytest.approx(10.0)
+    assert dist.scales["rv"] == dist.pooled
+    assert dist.d(rv, 1) == pytest.approx(1.0)  # 40 against the pooled 25
+
+
+def rest_corpus(n=8):
+    """Sessions of a rested 5:00 limit then a 2:30 limit after 40 s (a CO₂-table hold)."""
+    out = []
+    for k in range(n):
+        jitter = (k % 3) - 1
+        rested, tired = 300 + 5 * jitter, 150 - 3 * jitter
+        s = session(
+            [
+                st("breathe", 300, [v(t, 98.0) for t in range(0, 300, 10)]),
+                st(
+                    "hold",
+                    rested,
+                    [v(t, 98.0) for t in range(rested)],
+                    style="full",
+                    contractions=[100],
+                ),
+                st("breathe", 40, [v(t, 97.0) for t in range(40)]),
+                st(
+                    "hold",
+                    tired,
+                    [v(t, 98.0) for t in range(tired)],
+                    style="full",
+                    contractions=[50],
+                ),
+                st("breathe", 60, [v(t, 97.0) for t in range(60)]),
+            ],
+            start=f"2026-09-{10 + k}T18:00:00Z",
+            sid=f"rest-{k}",
+        )
+        out.append(s)
+    return out
+
+
+def test_rest_term_reads_a_table_limit_as_fatigued_not_as_a_lower_level():
+    from capacity import v5_fit
+    from fit_hold_model import estimates
+
+    sessions = rest_corpus()
+    with_rest, rows, _, _ = v5_fit(sessions, base_config())
+    without = v5_fit(sessions, base_config(), rest=False)[0]
+    assert all(not r["censored"] for r in rows) and len(rows) == 16
+    cfg = with_rest["cfg"]
+    assert cfg["covariates"] == ["holdIndex", "logRestBefore"]
+    assert len(cfg["betaCov"]) == 2 and cfg["betaCov"][0][0] > 0
+    level = estimates(with_rest, sessions, rule="v5")["full"]["level"]["estimate"]
+    flat = estimates(without, sessions, rule="v5")["full"]["level"]["estimate"]
+    assert flat[1] < 240 < 260 < level[1]  # the rested level, not the mix of 5:00 and 2:30
+    # the coefficients' covariance widens the level beyond the posterior of μ alone
+    mu, var = with_rest["post"]["full"]
+    assert math.log(level[2] / level[1]) > t90(2 * with_rest["an"]) * math.sqrt(var)
+
+
+def test_predictive_per_rule_at_the_target_context():
+    from capacity import predictive, target_context
+
+    sessions = rest_corpus()
+    probe = rest_corpus(1)[0]
+    probe["startedAt"] = probe["endedAt"] = "2026-10-01T18:00:00Z"
+    rested = target_context(probe, 1, sessions)
+    tired = target_context(probe, 3, sessions)
+    assert rested["holdIndex"] == 0 and tired["holdIndex"] == 1
+    for rule in ("v2", "v5"):
+        mu, sd, df = predictive(rule, sessions, "full", rested)
+        assert sd > 0 and df > 0 and math.isfinite(mu)
+    v5_rested = predictive("v5", sessions, "full", rested)[0]
+    v5_tired = predictive("v5", sessions, "full", tired)[0]
+    assert v5_tired < v5_rested - 0.3
+    # no RV rows: the placeholder prior (a third of the longest full hold) still predicts
+    assert predictive("v5", sessions, "rv", rested)[0] < v5_rested
+    assert predictive("v2", [], "full", rested) is None
+    with pytest.raises(ValueError):
+        predictive("v6", sessions, "full", rested)

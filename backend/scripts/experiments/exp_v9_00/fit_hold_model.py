@@ -269,7 +269,8 @@ def estimates(
     model, sessions, previously_shown=frozenset(), floors=None, tz=HARNESS_TIME_ZONE, rule="v2"
 ):
     """Per volume: level and pb estimates with their gates (`HoldModelEstimate`). `rule` "v5"
-    gates on holds with a trace and their effective weight (§18) instead of max attempts."""
+    gates on holds with a trace and their effective weight (§18) instead of max attempts, and
+    reports the level at the rested context x_PB (§19) rather than at the rows' centre."""
     floors = floors or DEFAULT_FLOORS
     a0, b0 = model["cfg"]["sigmaA0"], model["cfg"]["sigmaB0"]
     out = {}
@@ -301,8 +302,15 @@ def estimates(
             m0, s0, _ = model["priors"][v]
             an = model["an"]
             if kind == "level":
-                half = t90(2 * an) * math.sqrt(var)
-                est = (math.exp(mu - half), math.exp(mu), math.exp(mu + half))
+                loc, lvar = mu, var
+                if rule == "v5":  # §19: the level at the rested context, coefficient variance in
+                    x, a = pb_inputs(model, sessions, v, tz)
+                    cfg = model["cfg"]
+                    dx, da = deviation(x, model["xbar"]), deviation(a, model["abar"])
+                    loc += dot(cfg["beta"], dx) + dot(cfg["gamma"], da)
+                    lvar += quad(dx, cfg["betaCov"]) + quad(da, cfg["gammaCov"])
+                half = t90(2 * an) * math.sqrt(lvar)
+                est = (math.exp(loc - half), math.exp(loc), math.exp(loc + half))
                 narrowing = 1 - half / (Z90 * s0)
             else:
                 x, a = pb_inputs(model, sessions, v, tz)
@@ -492,10 +500,10 @@ def single_input_beta(name, kind):
     return fn
 
 
-def with_coefficients(train, cfg, tz=HARNESS_TIME_ZONE):
+def with_coefficients(train, cfg, tz=HARNESS_TIME_ZONE, rows=None, packing=None):
     """cfg with beta/betaCov/gamma/gammaCov estimated jointly for its covariates and axes."""
     c = dict(cfg)
-    coef, cov = estimate_coefficients(train, c, tz)
+    coef, cov = estimate_coefficients(train, c, tz, rows, packing)
     k = len(c["covariates"])
     c["beta"], c["gamma"] = coef[:k], coef[k:]
     c["betaCov"] = [row[:k] for row in cov[:k]]
@@ -503,24 +511,34 @@ def with_coefficients(train, cfg, tz=HARNESS_TIME_ZONE):
     return c
 
 
-def estimate_coefficients(train, cfg, tz=HARNESS_TIME_ZONE):
-    """HARNESS: joint ridge of y on the inputs within volumes, uncensored rows only, weighted by
-    recency, inputs measured from the same weighted-median centres fit() uses (missing = centre).
-    Prior sd 0.2 per input sd; σ² from the within-volume spread of y. An input with no spread,
-    or fewer than 3 usable rows, gets coefficient 0 and variance 0 (it contributes nothing).
-    Returns (coefficients, covariance) in covariates-then-axes order."""
+def estimate_coefficients(train, cfg, tz=HARNESS_TIME_ZONE, rows=None, packing=None):
+    """HARNESS: joint ridge of y on the inputs within volumes, uncensored rows only, weighted as
+    fit() weighs them (recency times a row's own weight, §18's d²), inputs measured from the same
+    weighted-median centres fit() uses (missing = centre), y net of the §17 packing offset when
+    `packing` is given. `rows` defaults to §10 v2's rows (§19 passes v5's, so the ridge runs on its
+    limit rows). Prior sd 0.2 per input sd; σ² from the within-volume spread of y. An input with
+    no spread, or fewer than 3 usable rows, gets coefficient 0 and variance 0 (it contributes
+    nothing). Returns (coefficients, covariance) in covariates-then-axes order."""
     k = len(cfg["covariates"]) + len(cfg["axes"])
     zero = ([0.0] * k, [[0.0] * k for _ in range(k)])
     fin = finished_sessions(train)
-    rows = model_rows(fin)
+    rows = model_rows(fin) if rows is None else rows
     if k == 0 or not rows:
         return zero
     t_now = max(started(s) for s in fin)
-    w = [weight(t_now, started(r["session"]), cfg["halfLifeDays"]) for r in rows]
+    w = [
+        weight(t_now, started(r["session"]), cfg["halfLifeDays"]) * r.get("weight", 1.0)
+        for r in rows
+    ]
     xa = [inputs(r, fin, cfg, tz) for r in rows]
     centre = centres([x + a for x, a in xa], w)
     pts = [
-        (r["mode"], deviation(x + a, centre), r["y"], wi)
+        (
+            r["mode"],
+            deviation(x + a, centre),
+            r["y"] - (packing.offset(r["session"]["steps"][r["stepIndex"]]) if packing else 0.0),
+            wi,
+        )
         for r, (x, a), wi in zip(rows, xa, w, strict=True)
         if not r["censored"]
     ]
