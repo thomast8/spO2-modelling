@@ -13,10 +13,11 @@ Usage:
                   optimiser settings with more than a handful of holds; not part of "all")
     --quick       caps DE at 5 generations to check the plumbing
     --plot        skips fitting and draws results/<group>.png from the saved results/<group>.json
-    --summary     skips fitting and prints the drift table from every saved results/*.json
+    --summary     skips fitting and prints the drift table from every saved results/*.json,
+                  then the free-vs-frozen table for every transfer result
     --rescore     adds apnea-window RMSE to every saved results/*.json (needs the data files)
     --transfer G  freezes the four globals (tau_0, p, k_co2, gamma) at results/G.json's values
-                  and fits only the per-hold parameters; writes results/transfer-<group>.json.
+                  and fits only the per-hold parameters; writes results/transfer-G-to-<group>.json.
                   This is the spec's own "Priority 2" test: do one session's globals carry?
 """
 
@@ -219,14 +220,30 @@ def plot_group(result, holds, out_path):
     print(f"  plot: {out_path}")
 
 
+def _converged(r):
+    """'yes', or the stages whose optimiser stopped at maxiter with best-so-far values."""
+    failed = [s for s in ("A", "B") if not r[f"stage_{s.lower()}"]["converged"]]
+    return f"no ({','.join(failed)})" if failed else "yes"
+
+
+def _washouts(r):
+    """Per-hold tau_washout by lung volume, '*' at a bound."""
+    by_type = {}
+    for h in r["holds"]:
+        by_type.setdefault(h["type"], []).append(
+            f"{h['tau_washout']:.0f}{'*' if h['tau_washout_at_bound'] else ''}"
+        )
+    return by_type
+
+
 def summarise(results):
     print(
         f"\n{'group':<22}{'holds':>5} {'pts':>5} {'tau_0':>6} {'p':>5} {'k_co2':>7} "
-        f"{'gamma':>6} {'R2a':>6} {'RMSEa':>6}  bound hits"
+        f"{'gamma':>6} {'R2a':>6} {'RMSEa':>6} {'conv':>8}  bound hits"
     )
     print(
         f"{'v7.08 (published)':<22}{4:>5} {800:>5} {17.68:>6.2f} {3.39:>5.2f} {0.1385:>7.4f} "
-        f"{1.863:>6.3f} {0.972:>6.3f} {'-':>6}  tau_w FRC x2, paco2_0 RV"
+        f"{1.863:>6.3f} {0.972:>6.3f} {'-':>6} {'yes':>8}  tau_w FRC x2, paco2_0 RV"
     )
     for r in results:
         if r is None:
@@ -243,8 +260,33 @@ def summarise(results):
         print(
             f"{r['group']:<22}{r['n_holds']:>5} {r['n_points']:>5} {a['tau_0']:>6.2f} "
             f"{a['p']:>5.2f} "
-            f"{b['k_co2']:>7.4f} {b['gamma']:>6.3f} {r2a:>6.3f} {rmse_str}  "
+            f"{b['k_co2']:>7.4f} {b['gamma']:>6.3f} {r2a:>6.3f} {rmse_str} {_converged(r):>8}  "
             f"{', '.join(hits) or '-'}"
+        )
+
+    free = {r["group"]: r for r in results if r is not None and not r.get("globals_from")}
+    transfers = [r for r in results if r and r.get("globals_from") and r["group"] in free]
+    pairs = [(free[r["group"]], r) for r in transfers]
+    if not pairs:
+        return
+    print(
+        f"\n{'session':<12}{'from':<12}{'n':>3} {'R2a free':>9} {'frozen':>7} {'RMSE free':>10} "
+        f"{'frozen':>7} {'|nadir err|':>12} {'conv free':>10} {'frozen':>8}  "
+        "tau_washout free -> frozen (type)"
+    )
+    for f, t in pairs:
+        mean = {
+            k: [np.mean([h[k] for h in r["holds"]]) for r in (f, t)]
+            for k in ("r2a_stage_b", "rmse_apnea_stage_b")
+        }
+        nadir = np.mean([abs(h["nadir_spo2_err_stage_b"]) for h in t["holds"]])
+        wf, wt = _washouts(f), _washouts(t)
+        washout = "; ".join(f"{' '.join(wf[k])} -> {' '.join(wt[k])} ({k})" for k in wf)
+        print(
+            f"{t['group']:<12}{t['globals_from']:<12}{t['n_holds']:>3} "
+            f"{mean['r2a_stage_b'][0]:>9.3f} {mean['r2a_stage_b'][1]:>7.3f} "
+            f"{mean['rmse_apnea_stage_b'][0]:>10.2f} {mean['rmse_apnea_stage_b'][1]:>7.2f} "
+            f"{nadir:>12.1f} {_converged(f):>10} {_converged(t):>8}  {washout}"
         )
 
 
@@ -273,6 +315,9 @@ def main():
         ship.differential_evolution = lambda *a, **k: de(*a, **{**k, "maxiter": 5, "popsize": 5})
 
     holds = [h for f in args.files for h in load(f)]
+    repeated = sorted({h["id"] for h in holds if [g["id"] for g in holds].count(h["id"]) > 1})
+    if repeated:
+        sys.exit(f"hold ids repeat across the input files: {repeated}")
     sessions = sorted({h["meta"]["session"] for h in holds})
     groups = {s: [h for h in holds if h["meta"]["session"] == s] for s in sessions}
     groups["pool-nadir"] = [h for h in holds if h["meta"]["source"] == "nadir"]
@@ -290,7 +335,7 @@ def main():
     globals_from = (
         json.loads((out_dir / f"{args.transfer}.json").read_text()) if args.transfer else None
     )
-    prefix = "transfer-" if args.transfer else ""
+    prefix = f"transfer-{args.transfer}-to-" if args.transfer else ""
     results = []
     for g in wanted:
         if args.plot:

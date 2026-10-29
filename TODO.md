@@ -28,7 +28,8 @@ _(newest first)_
   - Transit vs device delay not separable without a dual-oximeter session: `backend/scripts/experiments/exp_v8_01/`
 - [x] v8.00 baseline: v7.08 refitted per session on the Nadir recordings (2026-10-17)
   - Ten sessions, two oximeters: tau_0 6.6-39.1 s, k_co2 0.02-0.15 mmHg/s, gamma 1.16-2.51 across sessions
-  - Freezing all four globals at February's values costs under 0.025 R2a: the per-hold parameters do the work
+  - Freezing all four globals at February's values costs under 0.025 R2a on the app-recorded sessions with real desaturation; the shallow 8 August and 8 September sessions lose 0.059 and 0.018. The per-hold parameters do the work
+  - These are the 17 October numbers from the old loader; the loader fixes of 28 October need a full rerun (7 of 10 free fits done, transfers not yet)
   - Loader for Nadir exports + STAmina CSVs, transfer test, drift table and data request: `backend/scripts/experiments/exp_v8_00/`
 - [x] v7 model shipped (v7.08) - 8/8 success criteria PASS, formal methods spec written (2026-03-13)
   - Two-stage sensor + physiology model for breath-hold apnea SpO2 prediction

@@ -44,9 +44,9 @@
    "paco2_0_at_bound": false,
    "r2a_stage_b": -0.23587624431027998,
    "r2n_stage_b": 0.46764279932027764,
+   "rmse_apnea_stage_b": 1.5954098420278684,
    "nadir_err_stage_b": 23.0,
-   "nadir_spo2_err_stage_b": -0.7107776654561917,
-   "rmse_apnea_stage_b": 1.5954098420278684
+   "nadir_spo2_err_stage_b": -0.7107776654561917
   },
   {
    "id": "2026-08-08-FL6",
@@ -66,9 +66,9 @@
    "paco2_0_at_bound": false,
    "r2a_stage_b": 0.9307934805007023,
    "r2n_stage_b": 0.9231020663942865,
+   "rmse_apnea_stage_b": 1.1180459102757088,
    "nadir_err_stage_b": 0.0,
-   "nadir_spo2_err_stage_b": 1.8093575573240344,
-   "rmse_apnea_stage_b": 1.1180459102757088
+   "nadir_spo2_err_stage_b": 1.8093575573240344
   }
  ]
 }
