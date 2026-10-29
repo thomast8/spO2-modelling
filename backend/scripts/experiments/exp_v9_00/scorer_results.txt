@@ -1,0 +1,116 @@
+§19 neutral scorer: the §10 v2 and §18/§19 v5 row rules on one exam neither chooses
+====================================================================================
+
+Date: 2026-10-29
+Script:  backend/scripts/experiments/exp_v9_00/scorer.py
+Inputs:  Nadir full Export nadir-export-2026-10-29.json, Saturday, February 21, 2026.csv, NHANES cache used.
+Diver:   no profile, so both rules use the placeholder prior and no packing offset.
+
+Definitions (fixed in scorer.py before any score was computed):
+  Chain: finished sessions in (startedAt, id) order. For each held-out session both rules fit
+    once on the finished sessions that started strictly before it, the same set for both, with
+    the hold-model config base_config() (no half-life, no admitted inputs; v5 adds its own
+    holdIndex and logRestBefore). A config chosen on all data would leak the held-out sessions.
+  Targets: every performed hold of the held-out session with a trusted lung volume
+    (features.eligible_for_model: a known style, and not an estimated or imported label unless
+    confirmed), grouped by lung volume (packed counts as full). Nothing else selects them: not
+    either rule's d, the stop button (endTrigger, outcome), maxAttempt, plannedDuration or
+    symptoms. A session-volume is scored only when both rules return a predictive there, so the
+    chain at a volume starts with the first session where both have a posterior.
+  Predictive: capacity.predictive's (mu, sd, df) for ln capacity at the hold's own context
+    (capacity.target_context), ln T = mu + sd * t_df, with one fit per held-out session.
+  (1) Lower-bound log score: each target hold is a lower bound on capacity at its context,
+    scored log P(ln T > ln actual) = log S_t((ln actual - mu) / sd; df). Reported as the mean
+    per hold; higher is better.
+  (2) Upper-bound calibration: per scored session-volume its best hold (the longest target,
+    first of equals) is above the bound when actual > exp(mu + t_df(0.90) * sd) at the best
+    hold's context. Reported as the share of scored session-volumes; at most
+    10% is the target.
+  (3) Sharpness: the median over target holds of the 80 % predictive width in seconds,
+    exp(mu + q * sd) - exp(mu - q * sd) with q = t_df(0.90); lower is sharper.
+  Quantiles are scipy's Student-t, not the rules' own t90 table.
+  Decision per volume (§19): rule A is preferred over B iff share_A(2) <= share_B(2) and
+    mean_A(1) > mean_B(1) and median_A(3) <= median_B(3); when neither is preferred the result
+    is undecided. "No worse on (2)" is read as "no higher a share"; each share is also marked
+    against the 10% target so a reader can apply the threshold reading instead.
+  Bootstrap: resamples of the scored session-volumes with replacement (seed 19), giving the
+    5-95 % interval of the mean per-hold difference in (1), v5 minus v2, the share of resamples
+    where it is positive, and how often each verdict comes out. The predictives stay fixed.
+
+Chain: 57 finished sessions, 23 held-out sessions with target holds (104 holds).
+  volume   scored sessions  holds  skipped (a rule had no predictive)
+  full                  22     57  2026-08-06
+  frc                    0      0  none
+  rv                     8     38  2026-08-06
+
+Summary per volume
+  volume  rule   (1) mean log S     (2) bests above upper  (3) median width
+  full    v2             -0.086            0/22 (0%) pass             338 s
+          v5             -0.516            1/22 (5%) pass             161 s
+  frc     no scored session-volume (no target holds at this volume)
+  rv      v2             -0.086             0/8 (0%) pass             170 s
+          v5             -0.816            3/8 (38%) FAIL              48 s
+
+Verdict per volume (preferred rule in capitals)
+  full: undecided ((1) v2 higher, (2) v2 lower, (3) v5 narrower)
+    (1) v5 - v2 = -0.430 per hold; bootstrap over 22 sessions (2000 resamples): 5-95 % [-0.646, -0.275], positive in 0%
+    verdict across resamples: v2 3%, v5 0%, undecided 97%
+  rv: undecided ((1) v2 higher, (2) v2 lower, (3) v5 narrower)
+    (1) v5 - v2 = -0.730 per hold; bootstrap over 8 sessions (2000 resamples): 5-95 % [-1.102, -0.432], positive in 0%
+    verdict across resamples: v2 0%, v5 0%, undecided 100%
+
+Per-session tables (centre and 90 % upper bound at the best hold's context; * marks a best above it;
+(1) is the session's mean log S over its target holds)
+  full:
+    session           holds   best  v2 centre   upper  v5 centre   upper   (1) v2   (1) v5
+    2026-08-25 11:54      2   5:12       6:43  10:26        5:30   9:25    -0.195   -0.514
+    2026-08-27 12:14      4   5:12       6:57  10:27        5:21   9:10    -0.082   -0.384
+    2026-09-02 15:22      2   5:12       7:05  10:30        5:02   8:44    -0.148   -0.747
+    2026-09-04 18:54      2   5:32       7:11  10:32        5:48   7:11    -0.168   -0.418
+    2026-09-05 11:26      2   5:32       7:24  10:50        4:32   6:13    -0.135   -0.952
+    2026-09-08 19:23      5   2:30       7:32  10:56        5:11   6:42    -0.003   -0.000
+    2026-09-10 19:03      6   2:30       7:32  10:56        8:59  17:14    -0.003   -0.380
+    2026-09-14 16:12      7   5:12       7:32  10:56        7:31  12:36    -0.017   -0.199
+    2026-09-18 18:48      1   5:02       6:28   8:28        8:56  17:05    -0.123   -0.135
+    2026-09-29 17:07      1   3:15       6:03   7:42        6:28   9:41    -0.003   -0.020
+    2026-10-02 19:37      5   2:23       6:03   7:42        1:45   3:15    -0.000   -1.298
+    2026-10-04 15:18      2   4:53       6:03   7:42        3:33   7:05    -0.066   -0.652
+    2026-10-06 17:52      1   4:53       6:06   7:48        4:16   8:34    -0.127   -0.917
+    2026-10-07 19:12      1   5:12       6:09   7:54        3:52   8:02    -0.205   -1.216
+    2026-10-09 18:30      1   4:26       6:15   8:04        5:51   8:26    -0.051   -0.179
+    2026-10-12 18:38      1   5:45       6:16   8:06        3:41   5:17*   -0.399   -2.838
+    2026-10-14 16:32      6   5:45       6:26   8:29        5:41   7:11    -0.058   -0.126
+    2026-10-16 19:46      1   5:45       6:37   8:50        5:38   7:17    -0.302   -0.782
+    2026-10-18 18:11      2   7:02       6:47   9:13        5:47   7:19    -0.450   -1.548
+    2026-10-20 19:01      2   5:36       6:44   8:52        6:09   7:47    -0.111   -0.246
+    2026-10-22 12:52      2   5:45       6:29   8:17        6:06   7:35    -0.158   -0.356
+    2026-10-29 13:41      1   1:33       6:19   7:53        2:30   3:06    -0.000   -0.004
+  rv:
+    session           holds   best  v2 centre   upper  v5 centre   upper   (1) v2   (1) v5
+    2026-08-25 11:54      3   2:55       2:43   4:01        1:59   2:25*   -0.545   -2.805
+    2026-09-04 18:54      3   2:29       3:19   4:45        1:59   2:24*   -0.076   -1.318
+    2026-10-02 19:37      5   1:45       3:23   4:48        2:40   3:28    -0.008   -0.014
+    2026-10-12 18:38      6   2:19       3:25   4:55        2:05   2:50    -0.034   -0.336
+    2026-10-16 19:46      6   2:39       3:30   5:12        2:17   2:45    -0.064   -0.657
+    2026-10-18 18:11      5   3:07       3:38   5:26        2:17   2:40*   -0.103   -1.466
+    2026-10-20 19:01      5   2:18       3:57   5:48        2:14   2:38    -0.019   -0.301
+    2026-10-22 12:52      5   2:44       3:53   5:34        2:20   2:45    -0.034   -0.758
+
+Notes on the comparison (from the code, not from these numbers):
+  - capacity.predictive refits on every call. The scorer fits each rule once per held-out
+    session and repeats predictive's lines after the fit (tests/test_scorer.py holds the two
+    equal), so every hold of a session is scored against the same fit.
+  - With a profile, v5 has a physiology prior before it has a single row, and capacity.predictive
+    then raises a ValueError (fit_hold_model.predictive zips v5's two rest inputs against an
+    empty centre). The scorer counts such a session-volume as v5 having no predictive and skips
+    it; it is listed under "skipped" like any other.
+  - Only lower bounds are observed. (1) and (2) both improve as a rule's level rises, so neither
+    can punish a level that is too high; only (3), in seconds, pushes back, because the width
+    scales with the level as well as with the log spread.
+  - Under base_config() v2's predictive does not depend on the hold's context: every hold of a
+    session gets the same one. v5's moves with holdIndex and logRestBefore, so at table holds
+    it claims a lower, fatigued capacity. The two rules make different claims there: (1) can
+    only punish v5's lower claim and (3) rewards it.
+  - Before these definitions were written, one orientation probe printed both rules' predictive
+    centres next to the session bests, to check the interface and where the chain starts. No
+    metric was computed then.
